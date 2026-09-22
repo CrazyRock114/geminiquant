@@ -48,6 +48,8 @@ ENV/
 # Logs & Temporary files
 *.log
 .pytest_cache/
+data/cache/
+
 .coverage
 htmlcov/
 .cache/

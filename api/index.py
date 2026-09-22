@@ -27,11 +27,15 @@ from decision.state_builder import state_builder  # noqa: E402
 from decision.laya_engine import laya_engine  # noqa: E402
 from execution.oms import oms  # noqa: E402
 from risk.risk_manager import risk_manager  # noqa: E402
+from data.binance_data import BinanceDataClient  # noqa: E402
+from backtest.crypto_backtester import CryptoBacktester  # noqa: E402
+from backtest.strategies import StrategyRegistry  # noqa: E402
+from execution.binance_paper_broker import binance_paper_broker  # noqa: E402
 
 app = FastAPI(
     title="GeminiQuant 量化交易平台",
     description="全资产多智能体智能量化交易系统（A股/港美股/加密货币/金银/商品期货/期权）",
-    version="0.4.0"
+    version="0.5.0"
 )
 
 # 统一中文化术语映射表
@@ -102,6 +106,32 @@ class SimulateOrderRequest(BaseModel):
 
 class ResolveSymbolRequest(BaseModel):
     symbol: str
+
+class CryptoBacktestRequest(BaseModel):
+    symbol: str = "BTC/USDT"
+    interval: str = "1d"
+    limit: int = 180
+    strategy: str = "laya_momentum"
+    initial_capital: float = 100000.0
+    leverage: float = 1.0
+    allow_short: bool = True
+
+class CryptoPaperOrderRequest(BaseModel):
+    symbol: str = "BTC/USDT"
+    side: str = "BUY"
+    volume: float = 0.1
+    leverage: float = 1.0
+    order_type: str = "MARKET"
+    limit_price: Optional[float] = None
+
+class CryptoPaperCloseRequest(BaseModel):
+    position_id: str
+
+class CryptoPaperResetRequest(BaseModel):
+    initial_cash: float = 100000.0
+
+class CryptoPaperAutoTradeRequest(BaseModel):
+    symbol: str = "BTC/USDT"
 
 # 预置初始监控标的池（已核验证实）
 INITIAL_WATCHLIST = [
@@ -488,6 +518,12 @@ DASHBOARD_HTML = """
             <button onclick="switchTab('tab-universe')" id="btn-universe" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
                 🌐 全球全量标的看盘大厅
             </button>
+            <button onclick="switchTab('tab-backtest')" id="btn-backtest" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
+                📈 币安策略回测台
+            </button>
+            <button onclick="switchTab('tab-paper')" id="btn-paper" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
+                🪙 币安模拟盘控制台
+            </button>
             <button onclick="switchTab('tab-laya')" id="btn-laya" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
                 ⚡️ Laya 毫秒决策沙盘
             </button>
@@ -786,6 +822,391 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
+        <!-- TAB 6: 📈 币安策略回测台 (Binance Backtest Studio) -->
+        <div id="tab-backtest" class="tab-content hidden space-y-6">
+            <div class="glass p-6 rounded-2xl space-y-5">
+                <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                            <span>📈</span> 币安策略回测台 (Binance Backtest Studio)
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-0.5">直连币安官方公有历史 K 线接口 (无需私钥)，提供毫秒级多空向量化回测、滑点/手续费扣减与全量量化指标看板。</p>
+                    </div>
+                    <span class="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
+                        数据源: Binance Public Klines (官方数据直连)
+                    </span>
+                </div>
+
+                <!-- 回测参数表单 -->
+                <div class="grid grid-cols-2 md:grid-cols-6 gap-3.5 pt-2 text-xs">
+                    <div>
+                        <label class="text-slate-400 block mb-1">回测交易对:</label>
+                        <select id="bt-symbol" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="BTC/USDT" selected>BTC/USDT (比特币)</option>
+                            <option value="ETH/USDT">ETH/USDT (以太坊)</option>
+                            <option value="SOL/USDT">SOL/USDT (索拉纳)</option>
+                            <option value="ZEC/USDT">ZEC/USDT (大零币)</option>
+                            <option value="DOGE/USDT">DOGE/USDT (狗狗币)</option>
+                            <option value="BNB/USDT">BNB/USDT (币安币)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">K线周期:</label>
+                        <select id="bt-interval" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="1d" selected>日K (1d)</option>
+                            <option value="4h">4小时 (4h)</option>
+                            <option value="1h">1小时 (1h)</option>
+                            <option value="15m">15分钟 (15m)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">K线样本数量:</label>
+                        <select id="bt-limit" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="60">最近 60 根</option>
+                            <option value="180" selected>最近 180 根</option>
+                            <option value="365">最近 365 根</option>
+                            <option value="500">最近 500 根</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">量化策略模型:</label>
+                        <select id="bt-strategy" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="laya_momentum" selected>⚡️ Laya 动量风控策略</option>
+                            <option value="dual_ema">📈 双均线趋势跟踪 (EMA-12/26)</option>
+                            <option value="bollinger">📊 布林带均值回归</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">初始本金 (USDT):</label>
+                        <input type="number" id="bt-capital" value="100000" step="10000" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">杠杆倍数:</label>
+                        <select id="bt-leverage" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="1.0" selected>1x (无杠杆现货)</option>
+                            <option value="2.0">2x 杠杆</option>
+                            <option value="3.0">3x 杠杆</option>
+                            <option value="5.0">5x 杠杆</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between pt-1">
+                    <div class="flex items-center gap-2 text-xs text-slate-400">
+                        <input type="checkbox" id="bt-allow-short" checked class="accent-blue-500 rounded">
+                        <label for="bt-allow-short">允许双向做空 (币安永续合约仿真模式)</label>
+                    </div>
+                    <button onclick="runBacktest()" id="btn-run-backtest" class="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition shadow-lg shadow-blue-500/20 flex items-center gap-2">
+                        <span>▶ 启动币安真实历史回测</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 回测结果看板区 (默认隐藏，回测完成后展示) -->
+            <div id="bt-results-section" class="hidden space-y-6">
+                <!-- 6 核心量化指标卡片 -->
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+                    <div class="p-4 rounded-xl glass border border-slate-800 space-y-1">
+                        <div class="text-[11px] text-slate-400">累计总收益率</div>
+                        <div id="metric-total-return" class="text-xl font-bold mono text-emerald-400">+0.00%</div>
+                        <div id="metric-alpha" class="text-[10px] text-slate-500">超额 Alpha: +0.00%</div>
+                    </div>
+                    <div class="p-4 rounded-xl glass border border-slate-800 space-y-1">
+                        <div class="text-[11px] text-slate-400">最大动态回撤</div>
+                        <div id="metric-max-drawdown" class="text-xl font-bold mono text-rose-400">-0.00%</div>
+                        <div class="text-[10px] text-slate-500">严格风控防御</div>
+                    </div>
+                    <div class="p-4 rounded-xl glass border border-slate-800 space-y-1">
+                        <div class="text-[11px] text-slate-400">夏普比率 (Sharpe)</div>
+                        <div id="metric-sharpe" class="text-xl font-bold mono text-white">0.00</div>
+                        <div class="text-[10px] text-slate-500">无风险利率 2.0%</div>
+                    </div>
+                    <div class="p-4 rounded-xl glass border border-slate-800 space-y-1">
+                        <div class="text-[11px] text-slate-400">胜率 (Win Rate)</div>
+                        <div id="metric-win-rate" class="text-xl font-bold mono text-emerald-400">0.0%</div>
+                        <div id="metric-win-loss-count" class="text-[10px] text-slate-500">0 胜 / 0 负</div>
+                    </div>
+                    <div class="p-4 rounded-xl glass border border-slate-800 space-y-1">
+                        <div class="text-[11px] text-slate-400">盈亏比 (Profit Factor)</div>
+                        <div id="metric-profit-factor" class="text-xl font-bold mono text-white">0.00</div>
+                        <div class="text-[10px] text-slate-500">毛利 / 毛损</div>
+                    </div>
+                    <div class="p-4 rounded-xl glass border border-slate-800 space-y-1">
+                        <div class="text-[11px] text-slate-400">最终权益 (USDT)</div>
+                        <div id="metric-final-equity" class="text-xl font-bold mono text-white">$100,000</div>
+                        <div id="metric-fees" class="text-[10px] text-slate-500">手续费: $0.00</div>
+                    </div>
+                </div>
+
+                <!-- 净值走势曲线图 (SVG) -->
+                <div class="glass p-6 rounded-2xl space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                                <span>📊</span> 策略净值走势对比 (Strategy Equity vs Benchmark)
+                            </h3>
+                            <p class="text-[11px] text-slate-400 mt-0.5">蓝色线为策略动态净值，橙色线为标的买入持有 (Buy & Hold) 基准收益曲线</p>
+                        </div>
+                        <div class="flex items-center gap-4 text-xs">
+                            <span class="flex items-center gap-1.5 text-blue-400 font-semibold"><span class="w-3 h-0.5 bg-blue-400"></span> 策略净值</span>
+                            <span class="flex items-center gap-1.5 text-amber-400 font-semibold"><span class="w-3 h-0.5 bg-amber-400"></span> 买入持有基准</span>
+                        </div>
+                    </div>
+                    <div id="chart-container" class="w-full h-64 bg-slate-900/80 rounded-xl border border-slate-800 p-2 flex items-center justify-center">
+                        <svg id="equity-svg" class="w-full h-full"></svg>
+                    </div>
+                </div>
+
+                <!-- 逐笔成交记录流水 -->
+                <div class="glass p-6 rounded-2xl space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-bold text-white">逐笔撮合成交流水记录 (最近 50 笔)</h3>
+                        <span id="bt-trade-count" class="text-xs text-slate-400">共 0 笔平仓成交</span>
+                    </div>
+                    <div class="overflow-x-auto max-h-72">
+                        <table class="w-full text-left text-xs mono">
+                            <thead class="text-slate-400 border-b border-slate-800 text-[11px]">
+                                <tr>
+                                    <th class="pb-2">编号</th>
+                                    <th class="pb-2">方向</th>
+                                    <th class="pb-2">入场时间</th>
+                                    <th class="pb-2">离场时间</th>
+                                    <th class="pb-2">开仓价</th>
+                                    <th class="pb-2">平仓价</th>
+                                    <th class="pb-2">成交量</th>
+                                    <th class="pb-2">手续费</th>
+                                    <th class="pb-2 text-right">净盈亏 (USDT)</th>
+                                    <th class="pb-2 text-right">收益率</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bt-trades-tbody" class="divide-y divide-slate-800/60">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 7: 🪙 币安模拟盘控制台 (Binance Paper Trading Console) -->
+        <div id="tab-paper" class="tab-content hidden space-y-6">
+            <!-- 模拟盘账户资金看板 -->
+            <div class="glass p-6 rounded-2xl space-y-4">
+                <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                            <span>🪙</span> 币安高保真模拟盘控制台 (Binance Paper Trading Console)
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-0.5">行情直连币安官方 24/7 实时盘口，支持多空双向开平仓、动态杠杆保证金、强平预警与自动化托管。</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="loadPaperAccount()" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5">
+                            <span>🔄 刷新资金与持仓</span>
+                        </button>
+                        <button onclick="resetPaperAccount()" class="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition flex items-center gap-1.5">
+                            <span>🧹 一键重置账户 (10万U)</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 资产数据条 -->
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-3.5 pt-2 text-xs">
+                    <div class="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+                        <div class="text-slate-400 text-[11px]">总资产折合 (Equity)</div>
+                        <div id="paper-total-equity" class="text-base sm:text-lg font-bold mono text-white">$100,000.00</div>
+                        <div id="paper-total-pnl" class="text-[10px] text-emerald-400">+0.00 USDT (+0.0%)</div>
+                    </div>
+                    <div class="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+                        <div class="text-slate-400 text-[11px]">可用保证金 (Available)</div>
+                        <div id="paper-avail-cash" class="text-base sm:text-lg font-bold mono text-white">$100,000.00</div>
+                        <div class="text-[10px] text-slate-500">可自由开仓资金</div>
+                    </div>
+                    <div class="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+                        <div class="text-slate-400 text-[11px]">已占用保证金 (Margin)</div>
+                        <div id="paper-margin-used" class="text-base sm:text-lg font-bold mono text-amber-400">$0.00</div>
+                        <div class="text-[10px] text-slate-500">持仓保证金占用</div>
+                    </div>
+                    <div class="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+                        <div class="text-slate-400 text-[11px]">未实现浮动盈亏 (uPnL)</div>
+                        <div id="paper-unrealized-pnl" class="text-base sm:text-lg font-bold mono text-slate-300">$0.00</div>
+                        <div class="text-[10px] text-slate-500">基于币安实时盘口计算</div>
+                    </div>
+                    <div class="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-1">
+                        <div class="text-slate-400 text-[11px]">已实现净盈亏 (Realized)</div>
+                        <div id="paper-realized-pnl" class="text-base sm:text-lg font-bold mono text-slate-300">$0.00</div>
+                        <div class="text-[10px] text-slate-500">已平仓落袋净盈亏</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 主操作区: 快捷下单与自动托管 -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- 左侧: 币安模拟下单终端 -->
+                <div class="glass p-6 rounded-2xl space-y-4">
+                    <h3 class="text-sm font-bold text-white flex items-center justify-between">
+                        <span>⚡️ 币安模拟开平仓终端</span>
+                        <span id="paper-order-live-badge" class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">🟢 币安公共盘口直连</span>
+                    </h3>
+
+                    <div class="space-y-3.5 text-xs">
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-slate-400 block mb-1">交易标的:</label>
+                                <select id="paper-symbol" onchange="updatePaperOrderPrice()" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                                    <option value="BTC/USDT">BTC/USDT (比特币)</option>
+                                    <option value="ETH/USDT">ETH/USDT (以太坊)</option>
+                                    <option value="SOL/USDT">SOL/USDT (索拉纳)</option>
+                                    <option value="ZEC/USDT">ZEC/USDT (大零币)</option>
+                                    <option value="DOGE/USDT">DOGE/USDT (狗狗币)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="text-slate-400 block mb-1">最新参考价 (USDT):</label>
+                                <div id="paper-order-live-price" class="px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-emerald-400 font-bold mono text-sm flex items-center justify-between">
+                                    <span>$85,720.00</span>
+                                    <button onclick="updatePaperOrderPrice()" class="text-slate-500 hover:text-white text-[10px]">刷新</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 交易方向 -->
+                        <div>
+                            <label class="text-slate-400 block mb-1.5">开仓方向:</label>
+                            <div class="grid grid-cols-2 gap-3">
+                                <button onclick="selectPaperSide('BUY')" id="btn-side-buy" class="py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs border border-emerald-500 transition shadow-md shadow-emerald-600/20">
+                                    买入做多 (LONG)
+                                </button>
+                                <button onclick="selectPaperSide('SELL')" id="btn-side-sell" class="py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:text-white font-bold text-xs border border-slate-700 transition">
+                                    卖出做空 (SHORT)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 杠杆调节 -->
+                        <div>
+                            <label class="text-slate-400 flex justify-between">
+                                <span>杠杆倍数:</span>
+                                <span id="paper-val-leverage" class="text-amber-400 font-bold mono">2x</span>
+                            </label>
+                            <input type="range" id="paper-input-leverage" min="1" max="10" value="2" step="1" oninput="document.getElementById('paper-val-leverage').innerText = this.value + 'x'; calcPaperOrderCost();" class="w-full mt-1.5 accent-amber-500">
+                        </div>
+
+                        <!-- 委托数量与快捷比例 -->
+                        <div>
+                            <label class="text-slate-400 flex justify-between">
+                                <span>开仓数量 (币):</span>
+                                <span id="paper-val-est-cost" class="text-slate-500">预估保证金: $0.00 USDT</span>
+                            </label>
+                            <input type="number" id="paper-input-volume" value="0.1" step="0.01" oninput="calcPaperOrderCost()" class="w-full mt-1 px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white font-bold mono text-xs">
+                            <div class="flex items-center gap-2 mt-1.5 text-[10px]">
+                                <span class="text-slate-500">快速设置:</span>
+                                <button onclick="setPaperVolumePct(0.1)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">10%</button>
+                                <button onclick="setPaperVolumePct(0.25)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">25%</button>
+                                <button onclick="setPaperVolumePct(0.5)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">50%</button>
+                                <button onclick="setPaperVolumePct(0.9)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">90%</button>
+                            </div>
+                        </div>
+
+                        <button onclick="submitPaperOrder()" id="btn-submit-paper-order" class="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition shadow-lg shadow-blue-500/20">
+                            ⚡️ 提交币安模拟撮合委托
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 右侧: Laya 智能托管盯盘机器人 -->
+                <div class="glass p-6 rounded-2xl space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                            <span>🤖</span> Laya 自动盯盘调仓机器人
+                        </h3>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">毫秒决策驱动</span>
+                    </div>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        基于 Laya 极速判决引擎，实时拉取币安原生 15m K线计算 Wilder RMA RSI，若出现超卖/超买反转，自动触发多空开平仓。
+                    </p>
+
+                    <div class="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2 text-xs">
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-400">托管监控标的:</span>
+                            <span class="text-white font-bold mono">BTC/USDT</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-400">单笔调仓比例:</span>
+                            <span class="text-amber-400 font-bold mono">可用资金的 10% (2x 杠杆)</span>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-slate-400">前置风控拦截:</span>
+                            <span class="text-emerald-400 font-bold">已启用一票否决</span>
+                        </div>
+                    </div>
+
+                    <button onclick="runPaperAutoTrade()" id="btn-paper-auto-trade" class="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition shadow-lg shadow-purple-600/20 flex items-center justify-center gap-2">
+                        <span>▶ 执行单次 Laya 自动盯盘决策与调仓</span>
+                    </button>
+
+                    <!-- 机器人执行日志 -->
+                    <div class="space-y-1.5 text-xs">
+                        <div class="text-slate-400 text-[11px] font-semibold">最新机器人决策执行流水:</div>
+                        <div id="paper-auto-log" class="p-3 rounded-xl bg-slate-900 border border-slate-800 mono text-[11px] text-slate-300 space-y-1 max-h-36 overflow-y-auto">
+                            <div class="text-slate-500">[就绪] 点击上方按钮触发单步自动调仓...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 当前持仓明细表 -->
+            <div class="glass p-6 rounded-2xl space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                        <span>📑</span> 当前多空持仓明细 (Open Positions)
+                    </h3>
+                    <span id="paper-pos-count" class="text-xs text-slate-400">当前持有 0 个头寸</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs mono">
+                        <thead class="text-slate-400 border-b border-slate-800 text-[11px]">
+                            <tr>
+                                <th class="pb-2.5">标的</th>
+                                <th class="pb-2.5">方向</th>
+                                <th class="pb-2.5">持仓数量</th>
+                                <th class="pb-2.5">开仓均价</th>
+                                <th class="pb-2.5">最新标记价</th>
+                                <th class="pb-2.5">杠杆/保证金</th>
+                                <th class="pb-2.5">预估强平价</th>
+                                <th class="pb-2.5 text-right">未实现盈亏 (uPnL)</th>
+                                <th class="pb-2.5 text-right">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="paper-positions-tbody" class="divide-y divide-slate-800/60">
+                            <!-- 由 JS 渲染 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 历史成交流水 -->
+            <div class="glass p-6 rounded-2xl space-y-4">
+                <h3 class="text-sm font-bold text-white">历史委托与平仓流水</h3>
+                <div class="overflow-x-auto max-h-56">
+                    <table class="w-full text-left text-xs mono">
+                        <thead class="text-slate-400 border-b border-slate-800 text-[11px]">
+                            <tr>
+                                <th class="pb-2">时间</th>
+                                <th class="pb-2">标的</th>
+                                <th class="pb-2">动作</th>
+                                <th class="pb-2">成交价格</th>
+                                <th class="pb-2">成交量</th>
+                                <th class="pb-2">杠杆</th>
+                                <th class="pb-2">手续费</th>
+                                <th class="pb-2 text-right">状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="paper-orders-tbody" class="divide-y divide-slate-800/60">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- 页脚 -->
         <footer class="glass p-6 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-slate-400">
             <div>
@@ -984,6 +1405,13 @@ DASHBOARD_HTML = """
             if (tabId === 'tab-universe') {
                 document.getElementById('btn-universe').classList.add('active');
                 renderUniverseGrid();
+            }
+            if (tabId === 'tab-backtest') {
+                document.getElementById('btn-backtest').classList.add('active');
+            }
+            if (tabId === 'tab-paper') {
+                document.getElementById('btn-paper').classList.add('active');
+                loadPaperAccount();
             }
             if (tabId === 'tab-laya') document.getElementById('btn-laya').classList.add('active');
             if (tabId === 'tab-research') document.getElementById('btn-research').classList.add('active');
@@ -1269,6 +1697,403 @@ DASHBOARD_HTML = """
             } catch(e) {
                 box.innerHTML += `<div class="text-rose-500">[异常] 模拟订单请求错误: ${e}</div>`;
             }
+        // ================= 币安策略回测逻辑 =================
+        async function runBacktest() {
+            const sym = document.getElementById('bt-symbol').value;
+            const interval = document.getElementById('bt-interval').value;
+            const limit = parseInt(document.getElementById('bt-limit').value);
+            const strategy = document.getElementById('bt-strategy').value;
+            const capital = parseFloat(document.getElementById('bt-capital').value) || 100000.0;
+            const leverage = parseFloat(document.getElementById('bt-leverage').value) || 1.0;
+            const allowShort = document.getElementById('bt-allow-short').checked;
+
+            const btn = document.getElementById('btn-run-backtest');
+            btn.innerText = '正在向币安拉取历史K线并执行回测...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/crypto/backtest', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        symbol: sym,
+                        interval: interval,
+                        limit: limit,
+                        strategy: strategy,
+                        initial_capital: capital,
+                        leverage: leverage,
+                        allow_short: allowShort
+                    })
+                });
+                const d = await res.json();
+                if (!res.ok || d.error) {
+                    showErrorModal('回测执行失败: ' + (d.error || res.statusText));
+                    return;
+                }
+
+                // 渲染结果看板
+                document.getElementById('bt-results-section').classList.remove('hidden');
+
+                const m = d.metrics;
+                const totRet = m.total_return_pct;
+                document.getElementById('metric-total-return').innerText = (totRet >= 0 ? '+' : '') + totRet.toFixed(2) + '%';
+                document.getElementById('metric-total-return').className = totRet >= 0 ? 'text-xl font-bold mono text-emerald-400' : 'text-xl font-bold mono text-rose-400';
+                document.getElementById('metric-alpha').innerText = `超额 Alpha: ${(m.alpha_pct >= 0 ? '+' : '') + m.alpha_pct.toFixed(2)}% (基准: ${m.benchmark_return_pct.toFixed(2)}%)`;
+
+                document.getElementById('metric-max-drawdown').innerText = '-' + m.max_drawdown_pct.toFixed(2) + '%';
+                document.getElementById('metric-sharpe').innerText = m.sharpe_ratio.toFixed(2);
+                document.getElementById('metric-win-rate').innerText = m.win_rate_pct.toFixed(1) + '%';
+                document.getElementById('metric-win-loss-count').innerText = `${m.win_trades} 胜 / ${m.loss_trades} 负 (共 ${m.total_trades} 笔)`;
+                document.getElementById('metric-profit-factor').innerText = m.profit_factor.toFixed(2);
+                document.getElementById('metric-final-equity').innerText = '$' + m.final_equity.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                document.getElementById('metric-fees').innerText = `已付手续费: $${m.total_fees_paid.toLocaleString()}`;
+
+                // 渲染 SVG 净值曲线图
+                renderEquityCurveSvg(d.equity_curve);
+
+                // 渲染逐笔成交记录流水
+                const tbody = document.getElementById('bt-trades-tbody');
+                tbody.innerHTML = '';
+                document.getElementById('bt-trade-count').innerText = `共 ${m.total_trades} 笔平仓成交 (展示最近 ${d.trades.length} 笔)`;
+
+                d.trades.slice().reverse().forEach(tr => {
+                    const row = document.createElement('tr');
+                    const isProfit = tr.net_pnl >= 0;
+                    row.className = 'hover:bg-slate-800/40 transition';
+                    row.innerHTML = `
+                        <td class="py-2 text-slate-400">#${tr.trade_id}</td>
+                        <td class="font-bold ${tr.side.includes('LONG') ? 'text-emerald-400' : 'text-rose-400'}">${tr.side}</td>
+                        <td class="text-slate-400">${tr.entry_time}</td>
+                        <td class="text-slate-400">${tr.exit_time}</td>
+                        <td class="text-white">$${tr.entry_price.toLocaleString()}</td>
+                        <td class="text-white">$${tr.exit_price.toLocaleString()}</td>
+                        <td class="text-slate-300">${tr.volume}</td>
+                        <td class="text-slate-400">$${tr.fee}</td>
+                        <td class="text-right font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}">${isProfit ? '+' : ''}$${tr.net_pnl.toLocaleString()}</td>
+                        <td class="text-right font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}">${isProfit ? '+' : ''}${tr.return_pct}%</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                showToast(`标的 ${sym} 回测运算完成！总收益率: ${(totRet >= 0 ? '+' : '') + totRet.toFixed(2)}%`, true);
+            } catch(e) {
+                showErrorModal('回测请求异常: ' + e);
+            } finally {
+                btn.innerText = '▶ 启动币安真实历史回测';
+                btn.disabled = false;
+            }
+        }
+
+        function renderEquityCurveSvg(points) {
+            const svg = document.getElementById('equity-svg');
+            if (!svg || !points || points.length === 0) return;
+
+            const width = svg.clientWidth || 800;
+            const height = svg.clientHeight || 240;
+            const padding = { top: 20, right: 30, bottom: 25, left: 65 };
+
+            const stratValues = points.map(p => p.strategy_equity);
+            const benchValues = points.map(p => p.benchmark_equity);
+            const allValues = stratValues.concat(benchValues);
+
+            const minVal = Math.min(...allValues) * 0.98;
+            const maxVal = Math.max(...allValues) * 1.02;
+            const rangeY = (maxVal - minVal) || 1;
+
+            const plotW = width - padding.left - padding.right;
+            const plotH = height - padding.top - padding.bottom;
+
+            function getX(i) {
+                return padding.left + (i / (points.length - 1)) * plotW;
+            }
+            function getY(v) {
+                return padding.top + plotH - ((v - minVal) / rangeY) * plotH;
+            }
+
+            let stratPoly = '';
+            let benchPoly = '';
+            let areaPoly = `${getX(0)},${padding.top + plotH} `;
+
+            points.forEach((p, idx) => {
+                const x = getX(idx);
+                const yStrat = getY(p.strategy_equity);
+                const yBench = getY(p.benchmark_equity);
+                stratPoly += `${x},${yStrat} `;
+                benchPoly += `${x},${yBench} `;
+                areaPoly += `${x},${yStrat} `;
+            });
+            areaPoly += `${getX(points.length - 1)},${padding.top + plotH}`;
+
+            let gridLines = '';
+            for (let i = 0; i <= 4; i++) {
+                const gy = padding.top + (plotH / 4) * i;
+                const gVal = maxVal - (rangeY / 4) * i;
+                gridLines += `
+                    <line x1="${padding.left}" y1="${gy}" x2="${width - padding.right}" y2="${gy}" stroke="#1e293b" stroke-dasharray="3 3"/>
+                    <text x="${padding.left - 8}" y="${gy + 4}" fill="#64748b" font-size="10" text-anchor="end" font-family="JetBrains Mono">$${Math.round(gVal).toLocaleString()}</text>
+                `;
+            }
+
+            svg.innerHTML = `
+                <defs>
+                    <linearGradient id="stratGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.35"/>
+                        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.0"/>
+                    </linearGradient>
+                </defs>
+                ${gridLines}
+                <polygon points="${areaPoly}" fill="url(#stratGrad)"/>
+                <polyline points="${benchPoly}" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="4 3" opacity="0.8"/>
+                <polyline points="${stratPoly}" fill="none" stroke="#3b82f6" stroke-width="2.5"/>
+            `;
+        }
+
+        // ================= 币安模拟盘交互逻辑 =================
+        let paperSide = 'BUY';
+        let paperCurrentPrice = 85720.0;
+
+        function selectPaperSide(side) {
+            paperSide = side;
+            const btnBuy = document.getElementById('btn-side-buy');
+            const btnSell = document.getElementById('btn-side-sell');
+            if (side === 'BUY') {
+                btnBuy.className = 'py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs border border-emerald-500 transition shadow-md shadow-emerald-600/20';
+                btnSell.className = 'py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:text-white font-bold text-xs border border-slate-700 transition';
+            } else {
+                btnBuy.className = 'py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:text-white font-bold text-xs border border-slate-700 transition';
+                btnSell.className = 'py-2.5 rounded-xl bg-rose-600 text-white font-bold text-xs border border-rose-500 transition shadow-md shadow-rose-600/20';
+            }
+            calcPaperOrderCost();
+        }
+
+        async function updatePaperOrderPrice() {
+            const sym = document.getElementById('paper-symbol').value;
+            try {
+                const res = await fetch('/api/market/resolve', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol: sym })
+                });
+                const d = await res.json();
+                if (d.success && d.price) {
+                    paperCurrentPrice = d.price;
+                    document.getElementById('paper-order-live-price').firstElementChild.innerText = '$' + d.price.toLocaleString();
+                    calcPaperOrderCost();
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        function calcPaperOrderCost() {
+            const vol = parseFloat(document.getElementById('paper-input-volume').value) || 0.0;
+            const lev = parseFloat(document.getElementById('paper-input-leverage').value) || 1.0;
+            const nominal = vol * paperCurrentPrice;
+            const margin = nominal / lev;
+            const fee = nominal * 0.0005;
+            document.getElementById('paper-val-est-cost').innerText = `预估占用保证金: $${margin.toFixed(2)} USDT (手续费: $${fee.toFixed(2)})`;
+        }
+
+        function setPaperVolumePct(pct) {
+            const availText = document.getElementById('paper-avail-cash').innerText.replace('$', '').replace(/,/g, '');
+            const avail = parseFloat(availText) || 100000.0;
+            const lev = parseFloat(document.getElementById('paper-input-leverage').value) || 1.0;
+            const targetNominal = (avail * pct) * lev;
+            const targetVol = targetNominal / (paperCurrentPrice || 1.0);
+            document.getElementById('paper-input-volume').value = targetVol < 1 ? targetVol.toFixed(4) : targetVol.toFixed(2);
+            calcPaperOrderCost();
+        }
+
+        async function loadPaperAccount() {
+            try {
+                const res = await fetch('/api/crypto/paper/account');
+                const d = await res.json();
+
+                // 资金看板
+                document.getElementById('paper-total-equity').innerText = '$' + d.total_equity.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                document.getElementById('paper-avail-cash').innerText = '$' + d.available_cash.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                document.getElementById('paper-margin-used').innerText = '$' + d.margin_used.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+
+                const uPnl = d.total_unrealized_pnl;
+                document.getElementById('paper-unrealized-pnl').innerText = (uPnl >= 0 ? '+' : '') + '$' + uPnl.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                document.getElementById('paper-unrealized-pnl').className = uPnl >= 0 ? 'text-base sm:text-lg font-bold mono text-emerald-400' : 'text-base sm:text-lg font-bold mono text-rose-400';
+
+                const rPnl = d.realized_pnl;
+                document.getElementById('paper-realized-pnl').innerText = (rPnl >= 0 ? '+' : '') + '$' + rPnl.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                document.getElementById('paper-realized-pnl').className = rPnl >= 0 ? 'text-base sm:text-lg font-bold mono text-emerald-400' : 'text-base sm:text-lg font-bold mono text-rose-400';
+
+                const totPnl = d.total_pnl;
+                const totPct = d.total_pnl_pct;
+                document.getElementById('paper-total-pnl').innerText = `${totPnl >= 0 ? '+' : ''}${totPnl.toFixed(2)} USDT (${totPct >= 0 ? '+' : ''}${totPct.toFixed(2)}%)`;
+                document.getElementById('paper-total-pnl').className = totPnl >= 0 ? 'text-[10px] text-emerald-400 font-semibold' : 'text-[10px] text-rose-400 font-semibold';
+
+                // 持仓列表
+                const posTbody = document.getElementById('paper-positions-tbody');
+                posTbody.innerHTML = '';
+                document.getElementById('paper-pos-count').innerText = `当前持有 ${d.positions.length} 个头寸`;
+
+                if (d.positions.length === 0) {
+                    posTbody.innerHTML = '<tr><td colspan="9" class="py-6 text-center text-slate-500 text-xs">当前无开仓头寸，可在上方提交模拟订单或开启 Laya 自动盯盘。</td></tr>';
+                } else {
+                    d.positions.forEach(p => {
+                        const tr = document.createElement('tr');
+                        const isProf = p.unrealized_pnl >= 0;
+                        tr.className = 'hover:bg-slate-800/40 transition';
+                        tr.innerHTML = `
+                            <td class="py-2.5 font-bold text-white">${p.symbol}</td>
+                            <td class="font-bold ${p.side === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}">${p.side === 'LONG' ? '做多 (LONG)' : '做空 (SHORT)'}</td>
+                            <td class="text-white">${p.volume}</td>
+                            <td class="text-slate-300">$${p.entry_price.toLocaleString()}</td>
+                            <td class="text-slate-300">$${p.mark_price.toLocaleString()}</td>
+                            <td class="text-amber-400 font-semibold">${p.leverage}x ($${p.margin.toLocaleString()})</td>
+                            <td class="text-rose-400 font-bold">$${p.liquidation_price.toLocaleString()}</td>
+                            <td class="text-right font-bold ${isProf ? 'text-emerald-400' : 'text-rose-400'}">
+                                <div>${isProf ? '+' : ''}$${p.unrealized_pnl.toLocaleString()}</div>
+                                <div class="text-[10px]">${isProf ? '+' : ''}${p.return_pct}%</div>
+                            </td>
+                            <td class="text-right">
+                                <button onclick="closePaperPosition('${p.position_id}')" class="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs transition">
+                                    一键平仓
+                                </button>
+                            </td>
+                        `;
+                        posTbody.appendChild(tr);
+                    });
+                }
+
+                // 历史成交流水
+                const orderTbody = document.getElementById('paper-orders-tbody');
+                orderTbody.innerHTML = '';
+                const orders = (d.recent_orders || []).slice().reverse();
+                if (orders.length === 0) {
+                    orderTbody.innerHTML = '<tr><td colspan="8" class="py-4 text-center text-slate-500 text-xs">暂无历史委托记录。</td></tr>';
+                } else {
+                    orders.forEach(o => {
+                        const tr = document.createElement('tr');
+                        tr.className = 'hover:bg-slate-800/40 transition';
+                        tr.innerHTML = `
+                            <td class="py-1.5 text-slate-400">${o.time}</td>
+                            <td class="font-bold text-white">${o.symbol}</td>
+                            <td class="${o.action.includes('多') ? 'text-emerald-400' : 'text-rose-400'}">${o.action}</td>
+                            <td class="text-white">$${o.price.toLocaleString()}</td>
+                            <td class="text-slate-300">${o.volume}</td>
+                            <td class="text-slate-400">${o.leverage}</td>
+                            <td class="text-slate-400">$${o.fee}</td>
+                            <td class="text-right text-emerald-400 font-semibold">已成交 (FILLED)</td>
+                        `;
+                        orderTbody.appendChild(tr);
+                    });
+                }
+            } catch(e) {
+                console.error('加载模拟盘异常:', e);
+            }
+        }
+
+        async function submitPaperOrder() {
+            const sym = document.getElementById('paper-symbol').value;
+            const vol = parseFloat(document.getElementById('paper-input-volume').value) || 0.0;
+            const lev = parseFloat(document.getElementById('paper-input-leverage').value) || 1.0;
+
+            if (vol <= 0) {
+                showToast('请输入有效的开仓数量', false);
+                return;
+            }
+
+            const btn = document.getElementById('btn-submit-paper-order');
+            btn.innerText = '提交撮合中...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/crypto/paper/order', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        symbol: sym,
+                        side: paperSide,
+                        volume: vol,
+                        leverage: lev,
+                        order_type: 'MARKET'
+                    })
+                });
+                const d = await res.json();
+                if (!d.success) {
+                    showErrorModal(d.error);
+                } else {
+                    showToast(d.message, true);
+                    loadPaperAccount();
+                }
+            } catch(e) {
+                showErrorModal('模拟订单请求异常: ' + e);
+            } finally {
+                btn.innerText = '⚡️ 提交币安模拟撮合委托';
+                btn.disabled = false;
+            }
+        }
+
+        async function closePaperPosition(posId) {
+            try {
+                const res = await fetch('/api/crypto/paper/close', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ position_id: posId })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, true);
+                    loadPaperAccount();
+                } else {
+                    showErrorModal(d.error);
+                }
+            } catch(e) {
+                showErrorModal('平仓异常: ' + e);
+            }
+        }
+
+        async function resetPaperAccount() {
+            if (!confirm('确认重置模拟盘账户资金至初始 100,000 USDT？所有当前持仓将被清空。')) return;
+            try {
+                const res = await fetch('/api/crypto/paper/reset', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ initial_cash: 100000.0 })
+                });
+                const d = await res.json();
+                showToast(d.message, true);
+                loadPaperAccount();
+            } catch(e) {
+                showErrorModal('重置异常: ' + e);
+            }
+        }
+
+        async function runPaperAutoTrade() {
+            const sym = document.getElementById('paper-symbol').value;
+            const btn = document.getElementById('btn-paper-auto-trade');
+            btn.innerText = 'Laya 极速盯盘评估中...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/crypto/paper/auto-trade', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol: sym })
+                });
+                const d = await res.json();
+                const logBox = document.getElementById('paper-auto-log');
+                const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+                logBox.innerHTML = `
+                    <div class="text-blue-400 font-bold">[${ts}] 扫描 ${d.symbol} 现价: $${d.price.toLocaleString()} | RSI: ${d.rsi}</div>
+                    <div class="text-slate-300">↳ 决策结论: <span class="font-bold text-amber-300">${t(d.laya_action)}</span> (${d.decision_reason}) [耗时: ${d.latency_ms}ms]</div>
+                    <div class="text-emerald-400 font-semibold">↳ 执行结果: ${d.execution_result}</div>
+                ` + logBox.innerHTML;
+
+                showToast(`Laya 盯盘决策: ${t(d.laya_action)} (${d.execution_result})`, true);
+                loadPaperAccount();
+            } catch(e) {
+                showErrorModal('自动盯盘异常: ' + e);
+            } finally {
+                btn.innerText = '▶ 执行单次 Laya 自动盯盘决策与调仓';
+                btn.disabled = false;
+            }
         }
 
         // 页面就绪自动初始化
@@ -1446,3 +2271,55 @@ async def simulate_order(req: SimulateOrderRequest):
         "commission": report.commission,
         "account_equity": account.total_equity
     }
+
+# ================= 币安策略回测与模拟盘专用接口 =================
+
+@app.post("/api/crypto/backtest")
+async def run_crypto_backtest(req: CryptoBacktestRequest):
+    """执行币安真实历史 K 线量化策略回测"""
+    try:
+        df = BinanceDataClient.fetch_klines(symbol=req.symbol, interval=req.interval, limit=req.limit)
+        strat = StrategyRegistry.get_strategy(req.strategy)
+        backtester = CryptoBacktester(
+            strategy=strat,
+            initial_capital=req.initial_capital,
+            leverage=req.leverage,
+            allow_short=req.allow_short
+        )
+        res = backtester.run(df, symbol=req.symbol)
+        return res
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/crypto/paper/account")
+async def get_crypto_paper_account():
+    """获取币安模拟盘账户资金、多空持仓与最新标记价格快照"""
+    return binance_paper_broker.get_account_snapshot()
+
+@app.post("/api/crypto/paper/order")
+async def place_crypto_paper_order(req: CryptoPaperOrderRequest):
+    """向币安模拟撮合柜台提交开多或开空委托"""
+    return binance_paper_broker.place_order(
+        symbol=req.symbol,
+        side=req.side,
+        volume=req.volume,
+        leverage=req.leverage,
+        order_type=req.order_type,
+        limit_price=req.limit_price
+    )
+
+@app.post("/api/crypto/paper/close")
+async def close_crypto_paper_position(req: CryptoPaperCloseRequest):
+    """按现价平仓指定持仓"""
+    return binance_paper_broker.close_position(req.position_id)
+
+@app.post("/api/crypto/paper/reset")
+async def reset_crypto_paper_account(req: CryptoPaperResetRequest):
+    """一键重置币安模拟盘账户资金"""
+    return binance_paper_broker.reset_account(req.initial_cash)
+
+@app.post("/api/crypto/paper/auto-trade")
+async def auto_trade_crypto_paper(req: CryptoPaperAutoTradeRequest):
+    """触发单步 Laya 自动盯盘评估与调仓模拟"""
+    return binance_paper_broker.auto_trade_step(req.symbol)
+
