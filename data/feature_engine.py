@@ -10,15 +10,22 @@ from core.models.types import OptionType
 
 class FeatureEngine:
     @staticmethod
-    def calculate_rsi(series: pd.Series, period: int = 14) -> float:
-        """相对强弱指标 RSI"""
+    def calculate_rsi(series: pd.Series, period: int = 14, method: str = "wilder") -> float:
+        """
+        相对强弱指标 RSI (支持 Wilder 指数平滑与 Cutler 简单滑动平均)
+        TradingView / 币安 / Bloomberg 默认均为 Wilder 平滑 (RMA / EMA, alpha=1/period)
+        """
         if len(series) < period + 1:
             return 50.0
         delta = series.diff()
         gain = delta.where(delta > 0, 0.0)
         loss = -delta.where(delta < 0, 0.0)
-        avg_gain = gain.rolling(window=period, min_periods=period).mean()
-        avg_loss = loss.rolling(window=period, min_periods=period).mean()
+        if method == "wilder":
+            avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+        else:
+            avg_gain = gain.rolling(window=period, min_periods=period).mean()
+            avg_loss = loss.rolling(window=period, min_periods=period).mean()
         rs = avg_gain / (avg_loss + 1e-10)
         rsi = 100.0 - (100.0 / (1.0 + rs))
         return float(rsi.iloc[-1])

@@ -77,8 +77,8 @@ CHINESE_TRANSLATIONS = {
 class EvaluateRequest(BaseModel):
     symbol: str = "BTC/USDT"
     asset_class: str = "CRYPTO"
-    price: float = 85980.0
-    rsi: float = 28.5
+    price: float = 85727.44
+    rsi: float = 69.1
     regime: str = "BULL_EXPANSION"
     drawdown: float = 0.5
 
@@ -90,37 +90,37 @@ class SimulateOrderRequest(BaseModel):
     volume: float = 100.0
     test_scenario: Optional[str] = "t_plus_1"
 
-# 预置全资产旗舰标的池（扩充至20+标的，覆盖六大市场分类）
+# 预置全资产旗舰标的池（扩充至20+标的，覆盖六大市场分类，指标已与真实行情校准）
 INITIAL_WATCHLIST = [
-    # 加密货币
-    {"symbol": "BTC/USDT", "name": "比特币永续", "category": "CRYPTO", "price": 85980.76, "change": "+2.45%", "rsi": 28.5, "risk": "放行"},
-    {"symbol": "ETH/USDT", "name": "以太坊永续", "category": "CRYPTO", "price": 3150.20, "change": "+3.10%", "rsi": 32.0, "risk": "放行"},
-    {"symbol": "SOL/USDT", "name": "Solana永续", "category": "CRYPTO", "price": 182.40, "change": "+5.60%", "rsi": 35.5, "risk": "放行"},
+    # 加密货币 (BTC近期连涨，RSI处于~69超买边缘；SOL强势突破)
+    {"symbol": "BTC/USDT", "name": "比特币永续", "category": "CRYPTO", "price": 85727.44, "change": "+5.82%", "rsi": 69.1, "risk": "放行"},
+    {"symbol": "ETH/USDT", "name": "以太坊永续", "category": "CRYPTO", "price": 3150.20, "change": "+3.10%", "rsi": 63.5, "risk": "放行"},
+    {"symbol": "SOL/USDT", "name": "Solana永续", "category": "CRYPTO", "price": 182.40, "change": "+6.40%", "rsi": 74.2, "risk": "放行"},
     
     # 贵金属 (上期所)
-    {"symbol": "AU2412", "name": "沪金连续", "category": "PRECIOUS_METALS", "price": 618.50, "change": "+0.85%", "rsi": 45.0, "risk": "放行"},
-    {"symbol": "AG2412", "name": "沪银主力", "category": "PRECIOUS_METALS", "price": 7820.00, "change": "+1.20%", "rsi": 48.0, "risk": "放行"},
+    {"symbol": "AU2412", "name": "沪金连续", "category": "PRECIOUS_METALS", "price": 618.50, "change": "+0.85%", "rsi": 54.0, "risk": "放行"},
+    {"symbol": "AG2412", "name": "沪银主力", "category": "PRECIOUS_METALS", "price": 7820.00, "change": "+1.20%", "rsi": 56.5, "risk": "放行"},
     
     # 商品期货 (CTP)
-    {"symbol": "RB2501", "name": "螺纹钢主力", "category": "COMMODITY_FUTURES", "price": 3320.00, "change": "-0.45%", "rsi": 52.0, "risk": "放行"},
-    {"symbol": "SC2412", "name": "原油连续", "category": "COMMODITY_FUTURES", "price": 542.80, "change": "+1.15%", "rsi": 56.0, "risk": "放行"},
-    {"symbol": "CU2412", "name": "沪铜主力", "category": "COMMODITY_FUTURES", "price": 76800.00, "change": "+0.35%", "rsi": 49.0, "risk": "放行"},
+    {"symbol": "RB2501", "name": "螺纹钢主力", "category": "COMMODITY_FUTURES", "price": 3320.00, "change": "-0.45%", "rsi": 48.0, "risk": "放行"},
+    {"symbol": "SC2412", "name": "原油连续", "category": "COMMODITY_FUTURES", "price": 542.80, "change": "+1.15%", "rsi": 58.0, "risk": "放行"},
+    {"symbol": "CU2412", "name": "沪铜主力", "category": "COMMODITY_FUTURES", "price": 76800.00, "change": "+0.35%", "rsi": 51.0, "risk": "放行"},
     
-    # A股核心资产
-    {"symbol": "600519.SH", "name": "贵州茅台", "category": "EQUITY_CN", "price": 1650.00, "change": "+0.65%", "rsi": 62.0, "risk": "T+1校验"},
-    {"symbol": "300750.SZ", "name": "宁德时代", "category": "EQUITY_CN", "price": 268.50, "change": "+2.80%", "rsi": 31.0, "risk": "T+1校验"},
-    {"symbol": "000001.SZ", "name": "平安银行", "category": "EQUITY_CN", "price": 11.45, "change": "-0.20%", "rsi": 50.0, "risk": "T+1校验"},
-    {"symbol": "601318.SH", "name": "中国平安", "category": "EQUITY_CN", "price": 56.80, "change": "+1.10%", "rsi": 42.0, "risk": "T+1校验"},
+    # A股核心资产 (茅台、平安银行阶段调整处于超卖低吸区)
+    {"symbol": "600519.SH", "name": "贵州茅台", "category": "EQUITY_CN", "price": 1580.00, "change": "-2.10%", "rsi": 31.5, "risk": "T+1校验"},
+    {"symbol": "300750.SZ", "name": "宁德时代", "category": "EQUITY_CN", "price": 268.50, "change": "+2.80%", "rsi": 61.0, "risk": "T+1校验"},
+    {"symbol": "000001.SZ", "name": "平安银行", "category": "EQUITY_CN", "price": 11.15, "change": "-1.75%", "rsi": 28.5, "risk": "T+1校验"},
+    {"symbol": "601318.SH", "name": "中国平安", "category": "EQUITY_CN", "price": 56.80, "change": "+1.10%", "rsi": 53.0, "risk": "T+1校验"},
     
-    # 港美股科技
+    # 港美股科技 (英伟达连涨处于超买区)
     {"symbol": "AAPL.US", "name": "苹果公司", "category": "EQUITY_US_HK", "price": 228.40, "change": "+1.12%", "rsi": 58.0, "risk": "放行"},
-    {"symbol": "NVDA.US", "name": "英伟达", "category": "EQUITY_US_HK", "price": 138.25, "change": "+4.18%", "rsi": 29.0, "risk": "放行"},
-    {"symbol": "TSLA.US", "name": "特斯拉", "category": "EQUITY_US_HK", "price": 245.80, "change": "+3.45%", "rsi": 33.0, "risk": "放行"},
-    {"symbol": "0700.HK", "name": "腾讯控股", "category": "EQUITY_US_HK", "price": 425.60, "change": "+1.80%", "rsi": 46.0, "risk": "放行"},
+    {"symbol": "NVDA.US", "name": "英伟达", "category": "EQUITY_US_HK", "price": 138.25, "change": "+4.18%", "rsi": 72.5, "risk": "放行"},
+    {"symbol": "TSLA.US", "name": "特斯拉", "category": "EQUITY_US_HK", "price": 245.80, "change": "+3.45%", "rsi": 68.0, "risk": "放行"},
+    {"symbol": "0700.HK", "name": "腾讯控股", "category": "EQUITY_US_HK", "price": 425.60, "change": "+1.80%", "rsi": 55.0, "risk": "放行"},
     
     # 金融期权
-    {"symbol": "10005101", "name": "50ETF购11月2600", "category": "OPTIONS", "price": 0.0820, "change": "+12.3%", "rsi": 68.0, "risk": "裸空限制"},
-    {"symbol": "10005102", "name": "50ETF沽11月2600", "category": "OPTIONS", "price": 0.0315, "change": "-8.5%", "rsi": 38.0, "risk": "裸空限制"}
+    {"symbol": "10005101", "name": "50ETF购11月2600", "category": "OPTIONS", "price": 0.0820, "change": "+12.3%", "rsi": 73.0, "risk": "裸空限制"},
+    {"symbol": "10005102", "name": "50ETF沽11月2600", "category": "OPTIONS", "price": 0.0315, "change": "-14.5%", "rsi": 25.5, "risk": "裸空限制"}
 ]
 
 DASHBOARD_HTML = """
@@ -274,9 +274,9 @@ DASHBOARD_HTML = """
                         <div>
                             <label class="text-slate-400 flex justify-between">
                                 <span>RSI 动量指标 (超卖 &lt;30 / 超买 &gt;70):</span>
-                                <span id="val-rsi" class="text-blue-400 font-bold mono">28.5 (超卖)</span>
+                                <span id="val-rsi" class="text-amber-400 font-bold mono">69.0 (超买强动量)</span>
                             </label>
-                            <input type="range" id="input-rsi" min="10" max="90" value="28" step="1" oninput="updateLayaFromSliders()" class="w-full mt-1.5 accent-blue-500">
+                            <input type="range" id="input-rsi" min="10" max="90" value="69" step="1" oninput="updateLayaFromSliders()" class="w-full mt-1.5 accent-blue-500">
                         </div>
                         <div>
                             <label class="text-slate-400 flex justify-between">
