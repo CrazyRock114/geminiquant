@@ -11,6 +11,12 @@ class AssetClass(str, Enum):
     PRECIOUS_METALS = "PRECIOUS_METALS"   # 黄金白银/贵金属
     OPTIONS = "OPTIONS"                   # 期权 (ETF期权、商品期权、美股期权)
 
+class DataMode(str, Enum):
+    LIVE_FEED = "LIVE_FEED"               # 交易所实时生产行情 (直连 WebSocket / CTP 柜台)
+    HISTORICAL = "HISTORICAL"             # 历史盘后日K/分钟K线 (交易所已定盘收盘数据)
+    SIMULATED = "SIMULATED"               # 模拟撮合/仿真环境数据 (如 SimNow / 测试网)
+    DEMO_FIXTURE = "DEMO_FIXTURE"         # 演示测试样板 (离线沙盘调试，严禁直接用于真金白银实盘)
+
 class OrderSide(str, Enum):
     BUY = "BUY"
     SELL = "SELL"

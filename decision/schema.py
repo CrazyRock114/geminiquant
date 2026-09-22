@@ -27,3 +27,7 @@ class DecisionResult(BaseModel):
     action_probability: float = 1.0
     latency_ms: float = 0.0
     engine: str = "laya"
+    data_mode: str = "DEMO_FIXTURE" # "LIVE_FEED" | "HISTORICAL" | "SIMULATED" | "DEMO_FIXTURE"
+    data_source: str = "internal"
+    data_timestamp: str = ""
+    data_quality_warning: str = ""

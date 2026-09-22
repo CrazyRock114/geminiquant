@@ -4,7 +4,7 @@ OmniQuant Market Data Models (QIFI Compatible)
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
-from core.models.types import AssetClass, OptionType
+from core.models.types import AssetClass, OptionType, DataMode
 
 class TickData(BaseModel):
     symbol: str
@@ -20,6 +20,9 @@ class TickData(BaseModel):
     ask_volume_1: Optional[float] = None
     upper_limit_price: Optional[float] = None  # 涨停板
     lower_limit_price: Optional[float] = None  # 跌停板
+    data_mode: DataMode = DataMode.DEMO_FIXTURE
+    data_source: str = "internal"
+    quality_warning: Optional[str] = None
     extra: Dict[str, float] = Field(default_factory=dict)
 
 class BarData(BaseModel):
@@ -34,6 +37,9 @@ class BarData(BaseModel):
     volume: float
     turnover: float = 0.0
     open_interest: float = 0.0
+    data_mode: DataMode = DataMode.HISTORICAL
+    data_source: str = "internal"
+    quality_warning: Optional[str] = None
 
 class OrderBook(BaseModel):
     symbol: str
