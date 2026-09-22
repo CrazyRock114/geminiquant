@@ -33,6 +33,7 @@ from backtest.crypto_backtester import CryptoBacktester  # noqa: E402
 from backtest.strategies import StrategyRegistry, CustomRuleStrategy  # noqa: E402
 from backtest.strategy_catalog import STRATEGY_CATALOG  # noqa: E402
 from backtest.custom_strategy_validator import CustomStrategyValidator  # noqa: E402
+from backtest.matrix_backtester import MatrixBacktester  # noqa: E402
 from execution.binance_paper_broker import binance_paper_broker  # noqa: E402
 
 app = FastAPI(
@@ -119,6 +120,15 @@ class CryptoBacktestRequest(BaseModel):
     leverage: float = 1.0
     allow_short: bool = True
     custom_config: Optional[Dict[str, Any]] = None
+
+class CryptoMatrixBacktestRequest(BaseModel):
+    symbols: Optional[List[str]] = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "ZEC/USDT"]
+    strategies: Optional[List[str]] = None
+    interval: str = "1d"
+    limit: int = 365
+    initial_capital: float = 100000.0
+    leverage: float = 1.0
+    allow_short: bool = True
 
 class ValidateCustomStrategyRequest(BaseModel):
     config: Dict[str, Any]
@@ -533,6 +543,9 @@ DASHBOARD_HTML = """
             </button>
             <button onclick="switchTab('tab-backtest')" id="btn-backtest" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
                 📈 币安策略回测台
+            </button>
+            <button onclick="switchTab('tab-matrix')" id="btn-matrix" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent flex items-center gap-1">
+                <span>⚔️</span> 策略矩阵大比武 (多标的多策略)
             </button>
             <button onclick="switchTab('tab-paper')" id="btn-paper" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
                 🪙 币安模拟盘控制台
@@ -1255,6 +1268,19 @@ DASHBOARD_HTML = """
 
         <!-- TAB 6: 📈 币安策略回测台 (Binance Backtest Studio) -->
         <div id="tab-backtest" class="tab-content hidden space-y-6">
+            <!-- 策略大比武跳转横幅 -->
+            <div class="glass p-4 rounded-2xl border border-blue-500/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 bg-gradient-to-r from-blue-950/40 via-indigo-950/20 to-slate-900">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center text-xl font-bold border border-blue-500/30">⚔️</div>
+                    <div>
+                        <div class="font-bold text-white text-xs md:text-sm">需要一键横向对比 12 款主流策略在 BTC、ETH、SOL、ZEC 上的历史战绩？</div>
+                        <div class="text-[11px] text-slate-400">支持 48 组策略矩阵秒级回测、全天候综合总冠军评选、收益/回撤热力矩阵与天梯排行榜</div>
+                    </div>
+                </div>
+                <button onclick="switchTab('tab-matrix')" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition shadow-lg shadow-blue-500/20 shrink-0">
+                    🚀 前往策略矩阵大比武
+                </button>
+            </div>
             <div class="glass p-6 rounded-2xl space-y-5">
                 <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                     <div>
@@ -1428,7 +1454,226 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <!-- TAB 7: 🪙 币安模拟盘控制台 (Binance Paper Trading Console) -->
+        <!-- TAB 7: ⚔️ 策略矩阵大比武 (Matrix Backtest Arena) -->
+        <div id="tab-matrix" class="tab-content hidden space-y-6">
+            <!-- 顶部控制与配置面板 -->
+            <div class="glass p-6 rounded-2xl space-y-5">
+                <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-2xl">⚔️</span>
+                            <h2 class="text-lg font-bold text-white">策略矩阵大比武 (Multi-Strategy × Multi-Asset Arena)</h2>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30">工业级并发多因子回测</span>
+                        </div>
+                        <p class="text-xs text-slate-400 mt-1">
+                            一键横向回测对比 12 款主流策略在 BTC、ETH、SOL、ZEC 等多标的上的历史表现（4 标的 × 12 策略 = 48 组并发回测），挖掘全天候最优量化解。
+                        </p>
+                    </div>
+                    <span class="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-semibold border border-emerald-500/30 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        数据源: Binance 官方 365 根日K线直连
+                    </span>
+                </div>
+
+                <!-- 标的选择区 (Asset Selector) -->
+                <div class="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
+                    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+                        <span class="font-semibold text-slate-300 flex items-center gap-1.5">
+                            <span>🪙</span> 第一步：选择参评标的池 (Asset Universe)
+                        </span>
+                        <div class="flex items-center gap-1.5">
+                            <button onclick="setMatrixPresetSymbols('top4')" class="px-2.5 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white text-[11px] transition">
+                                ⭐ 四大主流 (BTC+ETH+SOL+ZEC) [默认]
+                            </button>
+                            <button onclick="setMatrixPresetSymbols('top6')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                                六大核心 (+DOGE+BNB)
+                            </button>
+                            <button onclick="setMatrixPresetSymbols('clear')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 text-[11px] transition">
+                                清空
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 标的 Chips 容器 -->
+                    <div id="matrix-symbols-container" class="flex flex-wrap items-center gap-2 pt-1">
+                        <!-- 由 JS 渲染可切换选中状态的标的按钮 -->
+                    </div>
+                    <!-- 自定义添加标的输入 -->
+                    <div class="flex items-center gap-2 pt-1">
+                        <input type="text" id="matrix-custom-sym-input" placeholder="输入自定义币安交易对 (如 ADA/USDT, AVAX/USDT)" class="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs w-64">
+                        <button onclick="addCustomMatrixSymbol()" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition border border-slate-700">
+                            + 加入参评
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 策略选择区 (Strategy Selector) -->
+                <div class="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
+                    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+                        <span class="font-semibold text-slate-300 flex items-center gap-1.5">
+                            <span>📐</span> 第二步：选择参评量化策略库 (Strategy Pool)
+                        </span>
+                        <div class="flex flex-wrap items-center gap-1.5">
+                            <button onclick="filterMatrixStrategies('ALL')" class="px-2.5 py-1 rounded-lg bg-blue-600/30 hover:bg-blue-600 text-blue-300 hover:text-white text-[11px] transition">
+                                ✅ 全选 12 款策略 [默认]
+                            </button>
+                            <button onclick="filterMatrixStrategies('趋势跟踪')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                                仅趋势跟踪
+                            </button>
+                            <button onclick="filterMatrixStrategies('均值回归')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                                仅均值回归
+                            </button>
+                            <button onclick="filterMatrixStrategies('通道与波动率')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                                仅通道与波动率
+                            </button>
+                            <button onclick="filterMatrixStrategies('资金流量价')" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                                仅资金流量价
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 策略 Checkbox 矩阵容器 -->
+                    <div id="matrix-strategies-container" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 pt-1">
+                        <!-- 由 JS 渲染 12 款策略的复选框与颜色标签 -->
+                    </div>
+                </div>
+
+                <!-- 回测周期与环境参数 -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5 text-xs">
+                    <div>
+                        <label class="text-slate-400 block mb-1">时间跨度 / K线数量:</label>
+                        <select id="matrix-lookback" onchange="updateMatrixPlanSummary()" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="1d_365" selected>最近 1 年 (365 根日K，推荐)</option>
+                            <option value="1d_180">最近半年 (180 根日K)</option>
+                            <option value="4h_180">最近 30 天 4小时K (180 根)</option>
+                            <option value="1h_168">最近 7 天 1小时K (168 根)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">初始本金 (USDT):</label>
+                        <input type="number" id="matrix-capital" value="100000" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">杠杆倍数:</label>
+                        <select id="matrix-leverage" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="1.0" selected>1.0x (无杠杆现货等效)</option>
+                            <option value="2.0">2.0x (温和双倍)</option>
+                            <option value="3.0">3.0x (激进杠杆)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">交易方向限制:</label>
+                        <select id="matrix-allow-short" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                            <option value="true" selected>多空双向交易 (做多+做空)</option>
+                            <option value="false">仅允许做多 (空头视为空仓)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 启动大按钮 -->
+                <div class="pt-2 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-slate-800">
+                    <div class="text-xs text-slate-400" id="matrix-plan-summary">
+                        预计任务量: <span class="text-blue-400 font-bold" id="matrix-plan-count">4 标的 × 12 策略 = 48 组并发回测</span> (向量化秒级完成)
+                    </div>
+                    <button onclick="runMatrixBacktest()" id="btn-run-matrix" class="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs transition shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2">
+                        <span>⚡️</span> 立即启动多标的多策略横向回测矩阵
+                    </button>
+                </div>
+            </div>
+
+            <!-- 动态结果展示区 (默认隐藏，跑完展示) -->
+            <div id="matrix-results-section" class="hidden space-y-6">
+                <!-- 1. 荣誉殿堂与标的冠军榜 (Champions Hall) -->
+                <div class="glass p-6 rounded-2xl space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl">🏆</span>
+                            <h3 class="text-base font-bold text-white">回测大比武荣誉殿堂 (Champions & Hall of Fame)</h3>
+                        </div>
+                        <span id="matrix-time-cost" class="text-xs text-slate-400"></span>
+                    </div>
+
+                    <!-- 冠军卡片网格 -->
+                    <div id="matrix-champions-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+                        <!-- 动态注入: 全天候总冠军 + BTC + ETH + SOL + ZEC 最佳 -->
+                    </div>
+                </div>
+
+                <!-- 2. 全量核心矩阵热力对比表 (Matrix Heatmap Table) -->
+                <div class="glass p-6 rounded-2xl space-y-4">
+                    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                        <div>
+                            <h3 class="text-base font-bold text-white flex items-center gap-2">
+                                <span>📊</span> 核心热力对比矩阵 (Matrix Heatmap)
+                            </h3>
+                            <p class="text-xs text-slate-400 mt-0.5">横轴为测试标的，纵轴为参评策略；深翠绿代表高收益，玫瑰红代表亏损。点击任意单元格可快速载入单次回测台深查资金曲线与交易明细。</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="exportMatrixReport()" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition border border-slate-700 flex items-center gap-1.5">
+                                <span>📥</span> 导出矩阵 JSON
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 热力表格 -->
+                    <div class="overflow-x-auto rounded-xl border border-slate-800">
+                        <table class="w-full text-left text-xs border-collapse">
+                            <thead id="matrix-table-thead" class="bg-slate-900/90 text-slate-400 font-semibold border-b border-slate-800">
+                                <!-- 动态渲染表头 -->
+                            </thead>
+                            <tbody id="matrix-table-tbody" class="divide-y divide-slate-800/60 bg-slate-950/40">
+                                <!-- 动态渲染矩阵各行 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 3. 策略综合天梯排行榜 (Leaderboard Table) -->
+                <div class="glass p-6 rounded-2xl space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-base font-bold text-white flex items-center gap-2">
+                                <span>🏅</span> 全策略综合实力天梯榜 (Strategy Leaderboard)
+                            </h3>
+                            <p class="text-xs text-slate-400 mt-0.5">综合评分兼顾跨标的平均累计收益率、夏普比率抗波动力度与最大回撤惩罚。</p>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto rounded-xl border border-slate-800">
+                        <table class="w-full text-left text-xs">
+                            <thead class="bg-slate-900/90 text-slate-400 font-semibold border-b border-slate-800">
+                                <tr>
+                                    <th class="px-4 py-3">天梯排名</th>
+                                    <th class="px-4 py-3">策略名称</th>
+                                    <th class="px-4 py-3">流派分类</th>
+                                    <th class="px-4 py-3">综合评级</th>
+                                    <th class="px-4 py-3">全标的平均收益</th>
+                                    <th class="px-4 py-3">平均最大回撤</th>
+                                    <th class="px-4 py-3">平均夏普比率</th>
+                                    <th class="px-4 py-3">平均胜率</th>
+                                    <th class="px-4 py-3">交易总笔数</th>
+                                    <th class="px-4 py-3">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="matrix-leaderboard-tbody" class="divide-y divide-slate-800/60">
+                                <!-- 动态渲染天梯榜 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 4. 量化洞察与归因归纳 (Quant AI Insights) -->
+                <div class="glass p-6 rounded-2xl space-y-3">
+                    <div class="flex items-center gap-2">
+                        <span class="text-lg">💡</span>
+                        <h3 class="text-base font-bold text-white">量化智能归因洞察 (Quant Strategic Insights)</h3>
+                    </div>
+                    <div id="matrix-insights-container" class="space-y-2 text-xs">
+                        <!-- 动态渲染洞察项 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 8: 🪙 币安模拟盘控制台 (Binance Paper Trading Console) -->
         <div id="tab-paper" class="tab-content hidden space-y-6">
             <!-- 模拟盘账户资金看板 -->
             <div class="glass p-6 rounded-2xl space-y-4">
@@ -1915,6 +2160,10 @@ DASHBOARD_HTML = """
             }
             if (tabId === 'tab-backtest') {
                 document.getElementById('btn-backtest')?.classList.add('active');
+            }
+            if (tabId === 'tab-matrix') {
+                document.getElementById('btn-matrix')?.classList.add('active');
+                initMatrixTab();
             }
             if (tabId === 'tab-paper') {
                 document.getElementById('btn-paper')?.classList.add('active');
@@ -3061,6 +3310,513 @@ DASHBOARD_HTML = """
             }
         }
 
+        // ================= 策略矩阵大比武 (Matrix Backtest Arena) 逻辑 =================
+        let matrixSelectedSymbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ZEC/USDT'];
+        let matrixSelectedStrategies = [
+            'laya_momentum', 'dual_ema', 'macd_cross', 'supertrend',
+            'donchian_breakout', 'bollinger', 'rsi_mean_reversion', 'keltner_channel',
+            'stoch_rsi', 'volatility_squeeze', 'dual_thrust', 'mfi_divergence'
+        ];
+        let matrixLastResult = null;
+        let matrixInitialized = false;
+
+        const MATRIX_PRESET_SYMBOLS = {
+            top4: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ZEC/USDT'],
+            top6: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'ZEC/USDT', 'DOGE/USDT', 'BNB/USDT']
+        };
+
+        function initMatrixTab() {
+            if (matrixInitialized) return;
+            renderMatrixSymbolsChips();
+            renderMatrixStrategiesCheckboxes();
+            updateMatrixPlanSummary();
+            matrixInitialized = true;
+        }
+
+        function renderMatrixSymbolsChips() {
+            const container = document.getElementById('matrix-symbols-container');
+            if (!container) return;
+
+            const allCandidates = Array.from(new Set([...MATRIX_PRESET_SYMBOLS.top6, ...matrixSelectedSymbols]));
+            container.innerHTML = allCandidates.map(sym => {
+                const isSelected = matrixSelectedSymbols.includes(sym);
+                return `
+                    <button type="button" onclick="toggleMatrixSymbol('${sym}')" class="px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 ${
+                        isSelected 
+                            ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20 border border-blue-400' 
+                            : 'bg-slate-800/80 hover:bg-slate-800 text-slate-400 border border-slate-700/60'
+                    }">
+                        <span>${isSelected ? '✓' : '+'}</span>
+                        <span class="mono">${sym}</span>
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function toggleMatrixSymbol(sym) {
+            if (matrixSelectedSymbols.includes(sym)) {
+                if (matrixSelectedSymbols.length <= 1) {
+                    showToast('至少需要保留 1 个参评标的', false);
+                    return;
+                }
+                matrixSelectedSymbols = matrixSelectedSymbols.filter(s => s !== sym);
+            } else {
+                matrixSelectedSymbols.push(sym);
+            }
+            renderMatrixSymbolsChips();
+            updateMatrixPlanSummary();
+        }
+
+        function setMatrixPresetSymbols(preset) {
+            if (preset === 'top4') {
+                matrixSelectedSymbols = [...MATRIX_PRESET_SYMBOLS.top4];
+            } else if (preset === 'top6') {
+                matrixSelectedSymbols = [...MATRIX_PRESET_SYMBOLS.top6];
+            } else if (preset === 'clear') {
+                matrixSelectedSymbols = ['BTC/USDT'];
+            }
+            renderMatrixSymbolsChips();
+            updateMatrixPlanSummary();
+        }
+
+        function addCustomMatrixSymbol() {
+            const input = document.getElementById('matrix-custom-sym-input');
+            if (!input) return;
+            let val = input.value.trim().toUpperCase();
+            if (!val) return;
+            if (!val.includes('/')) {
+                if (val.endsWith('USDT')) {
+                    val = val.replace('USDT', '/USDT');
+                } else {
+                    val = `${val}/USDT`;
+                }
+            }
+            if (!matrixSelectedSymbols.includes(val)) {
+                matrixSelectedSymbols.push(val);
+                renderMatrixSymbolsChips();
+                updateMatrixPlanSummary();
+                showToast(`已将 ${val} 加入矩阵参评标的池`, true);
+            }
+            input.value = '';
+        }
+
+        function renderMatrixStrategiesCheckboxes() {
+            const container = document.getElementById('matrix-strategies-container');
+            if (!container) return;
+
+            const allStratKeys = Object.keys(strategyCatalog);
+            container.innerHTML = allStratKeys.map(sid => {
+                const s = strategyCatalog[sid];
+                const isSelected = matrixSelectedStrategies.includes(sid);
+                return `
+                    <label class="p-2.5 rounded-xl border transition flex items-start gap-2.5 cursor-pointer ${
+                        isSelected 
+                            ? 'bg-slate-800/90 border-blue-500/50 shadow-sm' 
+                            : 'bg-slate-900/60 border-slate-800 text-slate-500 hover:border-slate-700'
+                    }">
+                        <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleMatrixStrategy('${sid}')" class="accent-blue-500 rounded mt-0.5">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center justify-between gap-1">
+                                <span class="font-bold text-xs truncate ${isSelected ? 'text-white' : 'text-slate-400'}">${s.name}</span>
+                                <span class="text-[9px] px-1 rounded bg-${s.tag_color}-500/20 text-${s.tag_color}-400 shrink-0">${s.category.slice(0, 4)}</span>
+                            </div>
+                            <div class="text-[10px] text-slate-400 truncate mt-0.5">${s.badge}</div>
+                        </div>
+                    </label>
+                `;
+            }).join('');
+        }
+
+        function toggleMatrixStrategy(sid) {
+            if (matrixSelectedStrategies.includes(sid)) {
+                if (matrixSelectedStrategies.length <= 1) {
+                    showToast('至少需要保留 1 款参评策略', false);
+                    renderMatrixStrategiesCheckboxes();
+                    return;
+                }
+                matrixSelectedStrategies = matrixSelectedStrategies.filter(s => s !== sid);
+            } else {
+                matrixSelectedStrategies.push(sid);
+            }
+            renderMatrixStrategiesCheckboxes();
+            updateMatrixPlanSummary();
+        }
+
+        function filterMatrixStrategies(cat) {
+            const allStratKeys = Object.keys(strategyCatalog);
+            if (cat === 'ALL') {
+                matrixSelectedStrategies = [...allStratKeys];
+            } else {
+                matrixSelectedStrategies = allStratKeys.filter(sid => {
+                    const c = strategyCatalog[sid].category;
+                    return c.includes(cat);
+                });
+                if (matrixSelectedStrategies.length === 0) {
+                    matrixSelectedStrategies = [...allStratKeys];
+                }
+            }
+            renderMatrixStrategiesCheckboxes();
+            updateMatrixPlanSummary();
+        }
+
+        function updateMatrixPlanSummary() {
+            const planCount = document.getElementById('matrix-plan-count');
+            if (planCount) {
+                const totalRuns = matrixSelectedSymbols.length * matrixSelectedStrategies.length;
+                planCount.innerText = `${matrixSelectedSymbols.length} 标的 × ${matrixSelectedStrategies.length} 策略 = ${totalRuns} 组并发回测`;
+            }
+        }
+
+        async function runMatrixBacktest() {
+            const btn = document.getElementById('btn-run-matrix');
+            const lookbackVal = document.getElementById('matrix-lookback').value;
+            const [interval, limitStr] = lookbackVal.split('_');
+            const limit = parseInt(limitStr);
+            const capital = parseFloat(document.getElementById('matrix-capital').value) || 100000.0;
+            const leverage = parseFloat(document.getElementById('matrix-leverage').value) || 1.0;
+            const allowShort = document.getElementById('matrix-allow-short').value === 'true';
+
+            btn.disabled = true;
+            btn.innerHTML = `<span class="inline-block animate-spin mr-1">⏳</span> 正在向币安拉取 ${matrixSelectedSymbols.length} 大标的K线并执行 ${matrixSelectedSymbols.length * matrixSelectedStrategies.length} 组矩阵回测...`;
+
+            try {
+                const res = await fetch('/api/crypto/backtest-matrix', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        symbols: matrixSelectedSymbols,
+                        strategies: matrixSelectedStrategies,
+                        interval: interval,
+                        limit: limit,
+                        initial_capital: capital,
+                        leverage: leverage,
+                        allow_short: allowShort
+                    })
+                });
+
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    showErrorModal('矩阵回测执行失败: ' + (data.error || res.statusText));
+                    return;
+                }
+
+                matrixLastResult = data;
+                renderMatrixResults(data);
+                showToast(`已成功完成 ${data.summary.total_runs} 组策略矩阵回测 (耗时 ${data.summary.execution_time_seconds} 秒)`, true);
+            } catch (err) {
+                showErrorModal('网络通信或回测异常: ' + err);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<span>⚡️</span> 立即启动多标的多策略横向回测矩阵`;
+            }
+        }
+
+        function renderMatrixResults(data) {
+            const resultsSec = document.getElementById('matrix-results-section');
+            if (!resultsSec) return;
+            resultsSec.classList.remove('hidden');
+
+            const timeCostEl = document.getElementById('matrix-time-cost');
+            if (timeCostEl) {
+                timeCostEl.innerText = `执行完成: ${data.summary.total_runs} 组回测 · 耗时 ${data.summary.execution_time_seconds} 秒 · ${data.summary.period_desc}`;
+            }
+
+            renderChampionsGrid(data);
+            renderMatrixHeatmapTable(data);
+            renderMatrixLeaderboardTable(data);
+            renderMatrixInsights(data);
+
+            resultsSec.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function renderChampionsGrid(data) {
+            const grid = document.getElementById('matrix-champions-grid');
+            if (!grid) return;
+
+            const bestOverall = data.summary.best_overall;
+            const champs = data.summary.symbol_champions;
+
+            let html = '';
+
+            if (bestOverall) {
+                html += `
+                    <div class="p-4 rounded-xl bg-gradient-to-br from-amber-500/15 via-slate-900 to-slate-900 border border-amber-500/40 space-y-2 col-span-1 sm:col-span-2 lg:col-span-1 shadow-lg shadow-amber-500/10">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold text-amber-400 flex items-center gap-1">
+                                <span>🏆</span> 全天候总冠军
+                            </span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300">${bestOverall.grade}</span>
+                        </div>
+                        <div class="font-bold text-white text-sm truncate" title="${bestOverall.strategy_name}">${bestOverall.strategy_name}</div>
+                        <div class="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-800">
+                            <div>
+                                <div class="text-slate-400 text-[10px]">全标的平均收益</div>
+                                <div class="font-bold mono ${bestOverall.avg_return_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                                    ${bestOverall.avg_return_pct >= 0 ? '+' : ''}${bestOverall.avg_return_pct}%
+                                </div>
+                            </div>
+                            <div>
+                                <div class="text-slate-400 text-[10px]">平均夏普 / 回撤</div>
+                                <div class="font-bold mono text-white">${bestOverall.avg_sharpe_ratio} / ${bestOverall.avg_max_drawdown_pct}%</div>
+                            </div>
+                        </div>
+                        <div class="text-[10px] text-slate-400 truncate">综合得分: <span class="text-amber-400 font-bold">${bestOverall.composite_score}</span> · 跨周期稳定性第一</div>
+                    </div>
+                `;
+            }
+
+            data.symbols.forEach((sym, idx) => {
+                const champ = champs[sym];
+                if (!champ) return;
+                const medals = ['🥇', '🥈', '🥉', '🎖', '🏅', '⭐'];
+                const medal = medals[idx % medals.length];
+                const bh = champ.benchmark_return_pct;
+
+                html += `
+                    <div class="p-4 rounded-xl bg-slate-900/90 border border-slate-800 hover:border-blue-500/40 transition space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-[11px] font-bold text-blue-400 flex items-center gap-1">
+                                <span>${medal}</span> ${sym} 最佳
+                            </span>
+                            <span class="text-[10px] text-slate-400">死扛基准: ${bh >= 0 ? '+' : ''}${bh}%</span>
+                        </div>
+                        <div class="font-bold text-white text-xs truncate" title="${champ.strategy_name}">${champ.strategy_name}</div>
+                        <div class="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-slate-800/80">
+                            <div>
+                                <div class="text-slate-400 text-[10px]">最优收益率</div>
+                                <div class="font-bold mono ${champ.total_return_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                                    ${champ.total_return_pct >= 0 ? '+' : ''}${champ.total_return_pct}%
+                                </div>
+                            </div>
+                            <div>
+                                <div class="text-slate-400 text-[10px]">超额 Alpha</div>
+                                <div class="font-bold mono ${champ.alpha_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                                    ${champ.alpha_pct >= 0 ? '+' : ''}${champ.alpha_pct}%
+                                </div>
+                            </div>
+                        </div>
+                        <button onclick="loadMatrixCellToBacktest('${sym}', '${champ.strategy_id}')" class="w-full mt-1 px-2 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white text-[10px] font-semibold transition text-center">
+                            查看此组合资金曲线 ↗
+                        </button>
+                    </div>
+                `;
+            });
+
+            grid.innerHTML = html;
+        }
+
+        function renderMatrixHeatmapTable(data) {
+            const thead = document.getElementById('matrix-table-thead');
+            const tbody = document.getElementById('matrix-table-tbody');
+            if (!thead || !tbody) return;
+
+            let theadHtml = `
+                <tr>
+                    <th class="px-4 py-3 sticky left-0 bg-slate-900/95 z-10">参评策略名称</th>
+                    <th class="px-3 py-3">流派</th>
+            `;
+            data.symbols.forEach(sym => {
+                const bh = data.benchmark_returns[sym];
+                theadHtml += `
+                    <th class="px-4 py-3 text-center">
+                        <div class="font-bold text-white">${sym}</div>
+                        <div class="text-[10px] font-normal text-slate-400">死扛基准: ${bh >= 0 ? '+' : ''}${bh}%</div>
+                    </th>
+                `;
+            });
+            theadHtml += `
+                    <th class="px-4 py-3 text-right">全标的平均收益</th>
+                    <th class="px-3 py-3 text-center">平均回撤</th>
+                    <th class="px-3 py-3 text-center">平均夏普</th>
+                    <th class="px-3 py-3 text-center">教学解析</th>
+                </tr>
+            `;
+            thead.innerHTML = theadHtml;
+
+            const topStratIds = data.leaderboard.slice(0, 3).map(x => x.strategy_id);
+
+            let tbodyHtml = '';
+            data.strategies.forEach(strat => {
+                const sid = strat.id;
+                const stratRow = data.matrix[sid];
+                const lbMeta = data.leaderboard.find(x => x.strategy_id === sid) || {};
+                const isTop3 = topStratIds.includes(sid);
+
+                tbodyHtml += `
+                    <tr class="hover:bg-slate-800/40 transition">
+                        <td class="px-4 py-3 sticky left-0 bg-slate-950/90 z-10 font-bold text-white flex items-center gap-1.5 whitespace-nowrap">
+                            ${isTop3 ? '<span class="text-amber-400">★</span>' : ''}
+                            <span class="hover:text-blue-400 cursor-pointer" onclick="openStrategyDetailModal('${sid}')">${strat.name}</span>
+                        </td>
+                        <td class="px-3 py-3 whitespace-nowrap">
+                            <span class="px-2 py-0.5 rounded text-[10px] bg-${strat.tag_color}-500/20 text-${strat.tag_color}-400 font-medium">
+                                ${strat.category}
+                            </span>
+                        </td>
+                `;
+
+                data.symbols.forEach(sym => {
+                    const res = stratRow.results[sym] || {};
+                    const ret = res.total_return_pct ?? 0;
+                    const mdd = res.max_drawdown_pct ?? 0;
+                    const shp = res.sharpe_ratio ?? 0;
+
+                    let cellBg = 'bg-slate-900/40';
+                    let retColor = 'text-slate-300';
+                    if (ret >= 30) {
+                        cellBg = 'bg-emerald-500/25 border border-emerald-500/40';
+                        retColor = 'text-emerald-300 font-extrabold';
+                    } else if (ret >= 10) {
+                        cellBg = 'bg-emerald-500/15';
+                        retColor = 'text-emerald-400 font-bold';
+                    } else if (ret > 0) {
+                        cellBg = 'bg-emerald-500/5';
+                        retColor = 'text-emerald-400';
+                    } else if (ret <= -20) {
+                        cellBg = 'bg-rose-500/25 border border-rose-500/40';
+                        retColor = 'text-rose-400 font-bold';
+                    } else if (ret < 0) {
+                        cellBg = 'bg-rose-500/10';
+                        retColor = 'text-rose-400';
+                    }
+
+                    tbodyHtml += `
+                        <td class="px-3 py-2 text-center cursor-pointer hover:ring-2 hover:ring-blue-400 rounded-lg transition ${cellBg}" onclick="loadMatrixCellToBacktest('${sym}', '${sid}')" title="点击载入 ${sym} x ${strat.name} 到单次回测台查看成交明细">
+                            <div class="mono text-xs ${retColor}">
+                                ${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%
+                            </div>
+                            <div class="mono text-[10px] text-slate-400">
+                                回撤 ${mdd.toFixed(1)}% · 夏普 ${shp.toFixed(2)}
+                            </div>
+                        </td>
+                    `;
+                });
+
+                const avgRet = lbMeta.avg_return_pct ?? 0;
+                tbodyHtml += `
+                        <td class="px-4 py-3 text-right mono font-bold text-xs ${avgRet >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                            ${avgRet >= 0 ? '+' : ''}${avgRet.toFixed(2)}%
+                        </td>
+                        <td class="px-3 py-3 text-center mono text-xs text-slate-300">
+                            ${(lbMeta.avg_max_drawdown_pct ?? 0).toFixed(1)}%
+                        </td>
+                        <td class="px-3 py-3 text-center mono text-xs font-bold ${lbMeta.avg_sharpe_ratio >= 1.0 ? 'text-emerald-400' : 'text-slate-300'}">
+                            ${(lbMeta.avg_sharpe_ratio ?? 0).toFixed(2)}
+                        </td>
+                        <td class="px-3 py-3 text-center whitespace-nowrap">
+                            <button onclick="openStrategyDetailModal('${sid}')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                                📖 教学
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = tbodyHtml;
+        }
+
+        function renderMatrixLeaderboardTable(data) {
+            const tbody = document.getElementById('matrix-leaderboard-tbody');
+            if (!tbody) return;
+
+            tbody.innerHTML = data.leaderboard.map(item => {
+                const rank = item.rank;
+                let rankBadge = `<span class="mono font-bold text-slate-400">#${rank}</span>`;
+                if (rank === 1) rankBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">🥇 第 1 名</span>`;
+                else if (rank === 2) rankBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-400/20 text-slate-200 border border-slate-400/40">🥈 第 2 名</span>`;
+                else if (rank === 3) rankBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-700/20 text-amber-600 border border-amber-700/40">🥉 第 3 名</span>`;
+
+                const avgRet = item.avg_return_pct;
+                return `
+                    <tr class="hover:bg-slate-800/40 transition">
+                        <td class="px-4 py-3">${rankBadge}</td>
+                        <td class="px-4 py-3 font-bold text-white flex items-center gap-1.5">
+                            <span>${item.strategy_name}</span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-0.5 rounded text-[10px] bg-${item.tag_color}-500/20 text-${item.tag_color}-400">
+                                ${item.category}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="font-bold text-xs text-blue-400">${item.grade}</span>
+                            <span class="text-[10px] text-slate-400">(${item.composite_score}分)</span>
+                        </td>
+                        <td class="px-4 py-3 mono font-bold text-xs ${avgRet >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                            ${avgRet >= 0 ? '+' : ''}${avgRet.toFixed(2)}%
+                        </td>
+                        <td class="px-4 py-3 mono text-xs text-slate-300">${item.avg_max_drawdown_pct}%</td>
+                        <td class="px-4 py-3 mono text-xs font-bold ${item.avg_sharpe_ratio >= 1.0 ? 'text-emerald-400' : 'text-slate-300'}">${item.avg_sharpe_ratio}</td>
+                        <td class="px-4 py-3 mono text-xs text-slate-300">${item.avg_win_rate_pct}%</td>
+                        <td class="px-4 py-3 mono text-xs text-slate-400">${item.total_trades_all} 笔</td>
+                        <td class="px-4 py-3">
+                            <button onclick="openStrategyDetailModal('${item.strategy_id}')" class="px-2.5 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white text-xs font-medium transition">
+                                策略档案 ↗
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function renderMatrixInsights(data) {
+            const container = document.getElementById('matrix-insights-container');
+            if (!container) return;
+
+            if (!data.insights || data.insights.length === 0) {
+                container.innerHTML = '<div class="text-slate-400">暂无归因结论</div>';
+                return;
+            }
+
+            container.innerHTML = data.insights.map(item => `
+                <div class="p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-slate-300 flex items-start gap-2 leading-relaxed">
+                    <span>💡</span>
+                    <span>${item}</span>
+                </div>
+            `).join('');
+        }
+
+        function loadMatrixCellToBacktest(symbol, strategyId) {
+            const symSelect = document.getElementById('bt-symbol');
+            if (symSelect) {
+                let opt = Array.from(symSelect.options).find(o => o.value === symbol);
+                if (!opt) {
+                    opt = new Option(symbol, symbol, true, true);
+                    symSelect.add(opt);
+                }
+                symSelect.value = symbol;
+            }
+
+            const stratSelect = document.getElementById('bt-strategy');
+            if (stratSelect) {
+                stratSelect.value = strategyId;
+            }
+
+            switchTab('tab-backtest');
+            showToast(`已将 [${symbol} × ${strategyId}] 载入单次回测台，正在准备运行...`, true);
+
+            setTimeout(() => {
+                runBacktest();
+            }, 300);
+        }
+
+        function exportMatrixReport() {
+            if (!matrixLastResult) {
+                showToast('请先执行矩阵回测后再导出报告', false);
+                return;
+            }
+            const blob = new Blob([JSON.stringify(matrixLastResult, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `OmniQuant_Matrix_Backtest_Report_${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('已成功导出矩阵大比武完整 JSON 研报', true);
+        }
+
         // 页面就绪自动初始化
         document.addEventListener('DOMContentLoaded', () => {
             renderWatchlist();
@@ -3261,6 +4017,23 @@ async def run_crypto_backtest(req: CryptoBacktestRequest):
             allow_short=req.allow_short
         )
         res = backtester.run(df, symbol=req.symbol)
+        return res
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/crypto/backtest-matrix")
+async def run_crypto_matrix_backtest(req: CryptoMatrixBacktestRequest):
+    """执行多标的 x 多策略横向矩阵并发回测（如 12 策略 x BTC, ETH, SOL, ZEC 最近 1 年）"""
+    try:
+        res = MatrixBacktester.run_matrix(
+            symbols=req.symbols,
+            strategy_ids=req.strategies,
+            interval=req.interval,
+            limit=req.limit,
+            initial_capital=req.initial_capital,
+            leverage=req.leverage,
+            allow_short=req.allow_short
+        )
         return res
     except Exception as e:
         return {"error": str(e)}
