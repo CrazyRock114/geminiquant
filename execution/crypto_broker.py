@@ -1,7 +1,11 @@
 """
 OmniQuant Live Crypto Execution Broker (CCXT)
 """
-import ccxt
+try:
+    import ccxt
+except ImportError:
+    ccxt = None
+
 from typing import Dict
 import logging
 from core.models.types import OrderSide, OrderType, OrderStatus
@@ -17,6 +21,10 @@ class CryptoBroker(BaseBroker):
         self._connected = False
 
     async def connect(self) -> bool:
+        if ccxt is None:
+            logger.info("[CryptoBroker] CCXT not installed. Running in simulation gateway.")
+            self._connected = True
+            return True
         try:
             exchange_class = getattr(ccxt, settings.crypto_exchange)
             self.exchange = exchange_class({

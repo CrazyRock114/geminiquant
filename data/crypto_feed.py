@@ -2,7 +2,11 @@
 OmniQuant Crypto Data Feed Adapter (Powered by CCXT)
 Supports 24/7 Real-Time Tickers, OrderBooks, and Perpetual Funding Rates
 """
-import ccxt
+try:
+    import ccxt
+except ImportError:
+    ccxt = None
+
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 import logging
@@ -15,6 +19,10 @@ logger = logging.getLogger("OmniQuant.CryptoFeed")
 class CryptoMarketFeed:
     def __init__(self, exchange_id: Optional[str] = None):
         self.exchange_id = exchange_id or settings.crypto_exchange
+        if ccxt is None:
+            logger.info("CCXT not installed in environment. Using simulated crypto feed.")
+            self.exchange = None
+            return
         try:
             exchange_class = getattr(ccxt, self.exchange_id)
             self.exchange = exchange_class({

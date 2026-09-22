@@ -10,16 +10,20 @@ dependencies = [
     "numpy>=2.0.0",
     "pandas>=2.2.0",
     "scipy>=1.14.0",
-    "ccxt>=4.4.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+ml = [
     "torch>=2.4.0",
     "transformers>=4.48.0",
     "laya>=0.3.0",
     "openbb-core>=1.6.0",
-    "fastapi>=0.115.0",
-    "uvicorn>=0.32.0",
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
-    "requests>=2.32.0",
+    "ccxt>=4.4.0",
 ]
 
 [build-system]

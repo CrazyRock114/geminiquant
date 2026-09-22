@@ -1,8 +1,8 @@
 """
 GeminiQuant / OmniQuant Vercel Serverless Gateway & Web Dashboard
 """
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from datetime import datetime, timezone
 import sys
 from pathlib import Path
@@ -12,15 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.models.types import AssetClass
-from data.domestic_feed import domestic_feed
-from data.crypto_feed import crypto_feed
-from data.feature_engine import feature_engine
-from research.memory import research_memory
-from decision.state_builder import state_builder
-from decision.laya_engine import laya_engine
-from execution.oms import oms
-from risk.risk_manager import risk_manager
+from research.memory import research_memory  # noqa: E402
+from execution.oms import oms  # noqa: E402
 
 app = FastAPI(
     title="GeminiQuant Platform",
