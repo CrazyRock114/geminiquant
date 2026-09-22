@@ -1561,22 +1561,43 @@ DASHBOARD_HTML = """
                 const data = await res.json();
 
                 // 纯中文渲染
-                document.getElementById('res-action').innerText = t(data.action);
-                document.getElementById('res-action').className = data.action.includes('BUY') 
-                    ? 'text-lg font-bold text-emerald-400' 
-                    : (data.action.includes('SELL') || data.action === 'REDUCE' ? 'text-lg font-bold text-rose-400' : 'text-lg font-bold text-amber-400');
+                if (data && data.action) {
+                    const elAction = document.getElementById('res-action');
+                    if (elAction) {
+                        elAction.innerText = t(data.action);
+                        elAction.className = (data.action || '').includes('BUY') 
+                            ? 'text-lg font-bold text-emerald-400' 
+                            : ((data.action || '').includes('SELL') || data.action === 'REDUCE' ? 'text-lg font-bold text-rose-400' : 'text-lg font-bold text-amber-400');
+                    }
 
-                document.getElementById('res-urgency').innerText = t(data.urgency);
-                document.getElementById('res-confidence').innerText = t(data.confidence) + ' (' + (data.action_probability * 100).toFixed(1) + '%)';
-                document.getElementById('res-risk').innerText = data.risk_passed ? '✓ 校验通过 (全项放行)' : '✕ 前置风控否决 (已拦截)';
-                document.getElementById('res-risk').className = data.risk_passed ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
-                document.getElementById('res-size').innerText = t(data.size_factor);
-                document.getElementById('laya-latency-badge').innerText = '推理耗时: ' + data.latency_ms + ' 毫秒';
+                    const elUrgency = document.getElementById('res-urgency');
+                    if (elUrgency) elUrgency.innerText = t(data.urgency);
 
-                // 数据血统渲染
-                document.getElementById('res-data-source').innerText = data.data_source;
-                document.getElementById('res-data-time').innerText = data.data_timestamp;
-                document.getElementById('res-data-warning').innerText = data.potential_data_loss_warning;
+                    const elConf = document.getElementById('res-confidence');
+                    if (elConf) elConf.innerText = t(data.confidence) + ' (' + (((data.action_probability || 0) * 100).toFixed(1)) + '%)';
+
+                    const elRisk = document.getElementById('res-risk');
+                    if (elRisk) {
+                        elRisk.innerText = data.risk_passed ? '✓ 校验通过 (全项放行)' : '✕ 前置风控否决 (已拦截)';
+                        elRisk.className = data.risk_passed ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
+                    }
+
+                    const elSize = document.getElementById('res-size');
+                    if (elSize) elSize.innerText = t(data.size_factor);
+
+                    const elLat = document.getElementById('laya-latency-badge');
+                    if (elLat) elLat.innerText = '推理耗时: ' + (data.latency_ms || 0) + ' 毫秒';
+
+                    // 数据血统渲染
+                    const elDs = document.getElementById('res-data-source');
+                    if (elDs) elDs.innerText = data.data_source || '';
+
+                    const elDt = document.getElementById('res-data-time');
+                    if (elDt) elDt.innerText = data.data_timestamp || '';
+
+                    const elDw = document.getElementById('res-data-warning');
+                    if (elDw) elDw.innerText = data.potential_data_loss_warning || '';
+                }
             } catch (e) {
                 console.error(e);
             }
@@ -1697,6 +1718,8 @@ DASHBOARD_HTML = """
             } catch(e) {
                 box.innerHTML += `<div class="text-rose-500">[异常] 模拟订单请求错误: ${e}</div>`;
             }
+        }
+
         // ================= 币安策略回测逻辑 =================
         async function runBacktest() {
             const sym = document.getElementById('bt-symbol').value;
@@ -1910,22 +1933,38 @@ DASHBOARD_HTML = """
                 const d = await res.json();
 
                 // 资金看板
-                document.getElementById('paper-total-equity').innerText = '$' + d.total_equity.toLocaleString('zh-CN', {minimumFractionDigits: 2});
-                document.getElementById('paper-avail-cash').innerText = '$' + d.available_cash.toLocaleString('zh-CN', {minimumFractionDigits: 2});
-                document.getElementById('paper-margin-used').innerText = '$' + d.margin_used.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                const totalEq = d.total_equity ?? 0;
+                const availCash = d.available_cash ?? 0;
+                const marginUsed = d.margin_used ?? 0;
+                const uPnl = d.total_unrealized_pnl ?? 0;
+                const rPnl = d.realized_pnl ?? 0;
+                const totPnl = d.total_pnl ?? 0;
+                const totPct = d.total_pnl_pct ?? 0;
 
-                const uPnl = d.total_unrealized_pnl;
-                document.getElementById('paper-unrealized-pnl').innerText = (uPnl >= 0 ? '+' : '') + '$' + uPnl.toLocaleString('zh-CN', {minimumFractionDigits: 2});
-                document.getElementById('paper-unrealized-pnl').className = uPnl >= 0 ? 'text-base sm:text-lg font-bold mono text-emerald-400' : 'text-base sm:text-lg font-bold mono text-rose-400';
+                const elEq = document.getElementById('paper-total-equity');
+                if (elEq) elEq.innerText = '$' + totalEq.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                const elCash = document.getElementById('paper-avail-cash');
+                if (elCash) elCash.innerText = '$' + availCash.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                const elMargin = document.getElementById('paper-margin-used');
+                if (elMargin) elMargin.innerText = '$' + marginUsed.toLocaleString('zh-CN', {minimumFractionDigits: 2});
 
-                const rPnl = d.realized_pnl;
-                document.getElementById('paper-realized-pnl').innerText = (rPnl >= 0 ? '+' : '') + '$' + rPnl.toLocaleString('zh-CN', {minimumFractionDigits: 2});
-                document.getElementById('paper-realized-pnl').className = rPnl >= 0 ? 'text-base sm:text-lg font-bold mono text-emerald-400' : 'text-base sm:text-lg font-bold mono text-rose-400';
+                const elUPnl = document.getElementById('paper-unrealized-pnl');
+                if (elUPnl) {
+                    elUPnl.innerText = (uPnl >= 0 ? '+' : '') + '$' + uPnl.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                    elUPnl.className = uPnl >= 0 ? 'text-base sm:text-lg font-bold mono text-emerald-400' : 'text-base sm:text-lg font-bold mono text-rose-400';
+                }
 
-                const totPnl = d.total_pnl;
-                const totPct = d.total_pnl_pct;
-                document.getElementById('paper-total-pnl').innerText = `${totPnl >= 0 ? '+' : ''}${totPnl.toFixed(2)} USDT (${totPct >= 0 ? '+' : ''}${totPct.toFixed(2)}%)`;
-                document.getElementById('paper-total-pnl').className = totPnl >= 0 ? 'text-[10px] text-emerald-400 font-semibold' : 'text-[10px] text-rose-400 font-semibold';
+                const elRPnl = document.getElementById('paper-realized-pnl');
+                if (elRPnl) {
+                    elRPnl.innerText = (rPnl >= 0 ? '+' : '') + '$' + rPnl.toLocaleString('zh-CN', {minimumFractionDigits: 2});
+                    elRPnl.className = rPnl >= 0 ? 'text-base sm:text-lg font-bold mono text-emerald-400' : 'text-base sm:text-lg font-bold mono text-rose-400';
+                }
+
+                const elTotPnl = document.getElementById('paper-total-pnl');
+                if (elTotPnl) {
+                    elTotPnl.innerText = `${totPnl >= 0 ? '+' : ''}${totPnl.toFixed(2)} USDT (${totPct >= 0 ? '+' : ''}${totPct.toFixed(2)}%)`;
+                    elTotPnl.className = totPnl >= 0 ? 'text-[10px] text-emerald-400 font-semibold' : 'text-[10px] text-rose-400 font-semibold';
+                }
 
                 // 持仓列表
                 const posTbody = document.getElementById('paper-positions-tbody');
