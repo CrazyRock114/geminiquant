@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from datetime import datetime, timezone
 import sys
 import requests
+import json
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -29,7 +30,9 @@ from execution.oms import oms  # noqa: E402
 from risk.risk_manager import risk_manager  # noqa: E402
 from data.binance_data import BinanceDataClient  # noqa: E402
 from backtest.crypto_backtester import CryptoBacktester  # noqa: E402
-from backtest.strategies import StrategyRegistry  # noqa: E402
+from backtest.strategies import StrategyRegistry, CustomRuleStrategy  # noqa: E402
+from backtest.strategy_catalog import STRATEGY_CATALOG  # noqa: E402
+from backtest.custom_strategy_validator import CustomStrategyValidator  # noqa: E402
 from execution.binance_paper_broker import binance_paper_broker  # noqa: E402
 
 app = FastAPI(
@@ -115,6 +118,10 @@ class CryptoBacktestRequest(BaseModel):
     initial_capital: float = 100000.0
     leverage: float = 1.0
     allow_short: bool = True
+    custom_config: Optional[Dict[str, Any]] = None
+
+class ValidateCustomStrategyRequest(BaseModel):
+    config: Dict[str, Any]
 
 class CryptoPaperOrderRequest(BaseModel):
     symbol: str = "BTC/USDT"
@@ -518,6 +525,12 @@ DASHBOARD_HTML = """
             <button onclick="switchTab('tab-universe')" id="btn-universe" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
                 🌐 全球全量标的看盘大厅
             </button>
+            <button onclick="switchTab('tab-academy')" id="btn-academy" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent flex items-center gap-1">
+                <span>📚</span> 量化策略学院 (全量开源策略)
+            </button>
+            <button onclick="switchTab('tab-custom-builder')" id="btn-custom-builder" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent flex items-center gap-1">
+                <span>🛠</span> 自定义策略工坊 (防乱配向导)
+            </button>
             <button onclick="switchTab('tab-backtest')" id="btn-backtest" class="tab-btn px-4 py-2 text-xs font-semibold rounded-xl text-slate-300 hover:text-white transition border border-transparent">
                 📈 币安策略回测台
             </button>
@@ -822,6 +835,424 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
+        <!-- TAB: 📚 量化策略学院 (全量开源策略全景教学) -->
+        <div id="tab-academy" class="tab-content hidden space-y-6">
+            <div class="glass p-6 rounded-2xl space-y-5">
+                <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                            <span>📚</span> 量化策略学院与实战教学大厅 (Strategy Academy)
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-0.5">收录 12+ 经典开源量化策略（趋势跟踪、均值回归、波动率突破、资金流量价），配备详尽数学公式、优缺点剖析、参数调优避坑指引与一键载入回测验证。</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-400 text-xs font-semibold border border-blue-500/30">
+                            共收录 12 款开源工业级策略
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 策略分类与搜索筛选栏 -->
+                <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="filterAcademyCat('ALL')" id="acad-filter-all" class="academy-cat-btn active px-3 py-1.5 rounded-xl bg-blue-600 text-white text-xs font-semibold transition">
+                            全部类别 (12)
+                        </button>
+                        <button onclick="filterAcademyCat('趋势跟踪')" id="acad-filter-trend" class="academy-cat-btn px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">
+                            📈 趋势跟踪 (4)
+                        </button>
+                        <button onclick="filterAcademyCat('均值回归')" id="acad-filter-mean" class="academy-cat-btn px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">
+                            📊 均值回归 (4)
+                        </button>
+                        <button onclick="filterAcademyCat('波动率突破')" id="acad-filter-vol" class="academy-cat-btn px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">
+                            💥 波动率突破 (3)
+                        </button>
+                        <button onclick="filterAcademyCat('资金流量价')" id="acad-filter-flow" class="academy-cat-btn px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition">
+                            💎 资金流量价 (1)
+                        </button>
+                    </div>
+                    <div class="w-full sm:w-64">
+                        <input type="text" id="academy-search-input" oninput="renderStrategyAcademy()" placeholder="搜索策略名称、原理或指标..." class="w-full px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs focus:outline-none focus:border-blue-500">
+                    </div>
+                </div>
+
+                <!-- 新手避坑量化四诫 -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3 p-4 rounded-xl bg-slate-900/80 border border-slate-800 text-xs">
+                    <div class="space-y-1">
+                        <div class="font-bold text-amber-400 flex items-center gap-1.5">
+                            <span>🛡</span> 1. 绝不裸奔死扛
+                        </div>
+                        <p class="text-slate-400 text-[11px] leading-relaxed">任何量化策略必须包含不可妥协的硬止损线。没有 100% 胜率的圣杯，活下来才能复利。</p>
+                    </div>
+                    <div class="space-y-1">
+                        <div class="font-bold text-sky-400 flex items-center gap-1.5">
+                            <span>🔬</span> 2. 警惕过度拟合
+                        </div>
+                        <p class="text-slate-400 text-[11px] leading-relaxed">参数越复杂、条件越苛刻的策略，历史回测往往极其亮眼，但在未来真实行情中通常亏损最快。</p>
+                    </div>
+                    <div class="space-y-1">
+                        <div class="font-bold text-emerald-400 flex items-center gap-1.5">
+                            <span>🌊</span> 3. 顺应行情周期
+                        </div>
+                        <p class="text-slate-400 text-[11px] leading-relaxed">趋势策略必在震荡市频繁被打脸；回归策略必在单边市面临深套。理解策略的盈利土壤至关重要。</p>
+                    </div>
+                    <div class="space-y-1">
+                        <div class="font-bold text-rose-400 flex items-center gap-1.5">
+                            <span>⚖️</span> 4. 严格杠杆上限
+                        </div>
+                        <p class="text-slate-400 text-[11px] leading-relaxed">加密资产自身年化波动率超过 70%，杠杆超过 3x 时爆仓概率将呈指数级飙升。</p>
+                    </div>
+                </div>
+
+                <!-- 策略卡片网格容器 -->
+                <div id="academy-strategy-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+                    <!-- 动态渲染策略卡片 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: 🛠 自定义策略工坊 (带智能避坑指导与体检报告) -->
+        <div id="tab-custom-builder" class="tab-content hidden space-y-6">
+            <div class="glass p-6 rounded-2xl space-y-6">
+                <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                            <span>🛠</span> 自定义策略工坊 (Custom Strategy Studio)
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-0.5">可视化、结构化构建您的个性化量化模型。系统内置参数边界安全校验、逻辑冲突检查与策略健康体检评分，严禁胡乱随意配置与裸奔加仓。</p>
+                    </div>
+                    <!-- 预设模板快捷加载 -->
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-xs text-slate-400">快速加载经典模板:</span>
+                        <button onclick="loadCustomPreset('trend_breakout')" class="px-2.5 py-1 rounded-lg bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-xs border border-blue-500/40 transition">
+                            趋势突破型 (EMA+RSI)
+                        </button>
+                        <button onclick="loadCustomPreset('mean_reversion')" class="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs border border-amber-500/40 transition">
+                            均值震荡型 (布林带+RSI)
+                        </button>
+                        <button onclick="loadCustomPreset('momentum_macd')" class="px-2.5 py-1 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-xs border border-indigo-500/40 transition">
+                            动能共振型 (MACD+EMA)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 两列布局：左侧向导配置，右侧实时体检雷达与回测预览 -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <!-- 左侧：参数构建向导 (8 列) -->
+                    <div class="lg:col-span-8 space-y-5">
+                        <!-- Step 1: 策略基本信息 -->
+                        <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+                                    <span class="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px]">1</span>
+                                    策略定位与哲学
+                                </h3>
+                                <span class="text-[10px] text-slate-500">基础属性</span>
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                <div>
+                                    <label class="text-slate-400 block mb-1">策略名称:</label>
+                                    <input type="text" id="custom-name" value="稳健双均线动量复合策略" oninput="validateCustomStrategyLive()" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                                </div>
+                                <div>
+                                    <label class="text-slate-400 block mb-1">策略设计哲学:</label>
+                                    <select id="custom-type" onchange="validateCustomStrategyLive()" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                                        <option value="TREND" selected>📈 顺势交易 (Trend Following) - 宁可回撤，不踏空主升浪</option>
+                                        <option value="MEAN_REVERSION">📊 均值回归 (Mean Reversion) - 逢低摸底，箱体波段收割</option>
+                                        <option value="MOMENTUM">💥 极速动能 (Momentum Breakout) - 变盘爆发瞬间跟进</option>
+                                        <option value="COMPOSITE">🧩 复合多因子 (Composite Rules) - 趋势+摆荡多层共振</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: 技术指标选择与参数约束 (带安全边界提示) -->
+                        <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-4">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+                                    <span class="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px]">2</span>
+                                    核心技术指标与参数边界 (严禁胡乱设置)
+                                </h3>
+                                <span class="text-[10px] text-amber-400">系统已挂载越界检查器</span>
+                            </div>
+
+                            <div class="space-y-3 text-xs">
+                                <!-- EMA 均线面板 -->
+                                <div class="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-2">
+                                    <div class="flex items-center justify-between">
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="checkbox" id="ind-ema-enable" checked onchange="validateCustomStrategyLive()" class="accent-blue-500 rounded">
+                                            <span class="font-bold text-white">双均线通道 (EMA Fast / Slow)</span>
+                                        </label>
+                                        <span id="ema-guide-tip" class="text-[11px] text-slate-400">规则要求: 快线周期必须严格小于慢线</span>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-3 pt-1">
+                                        <div>
+                                            <div class="flex justify-between text-[11px] text-slate-400">
+                                                <span>快线周期 (Fast):</span>
+                                                <span id="lbl-ema-fast" class="mono text-white font-bold">12</span>
+                                            </div>
+                                            <input type="range" id="val-ema-fast" min="3" max="50" value="12" step="1" oninput="document.getElementById('lbl-ema-fast').innerText=this.value; validateCustomStrategyLive();" class="w-full accent-blue-500 mt-1">
+                                        </div>
+                                        <div>
+                                            <div class="flex justify-between text-[11px] text-slate-400">
+                                                <span>慢线周期 (Slow):</span>
+                                                <span id="lbl-ema-slow" class="mono text-white font-bold">26</span>
+                                            </div>
+                                            <input type="range" id="val-ema-slow" min="10" max="150" value="26" step="1" oninput="document.getElementById('lbl-ema-slow').innerText=this.value; validateCustomStrategyLive();" class="w-full accent-blue-500 mt-1">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- RSI 摆荡面板 -->
+                                <div class="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-2">
+                                    <div class="flex items-center justify-between">
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="checkbox" id="ind-rsi-enable" checked onchange="validateCustomStrategyLive()" class="accent-blue-500 rounded">
+                                            <span class="font-bold text-white">相对强弱指标 (Wilder RMA RSI)</span>
+                                        </label>
+                                        <span class="text-[11px] text-slate-400">合理区间: 超卖 20~35，超买 65~80</span>
+                                    </div>
+                                    <div class="grid grid-cols-3 gap-3 pt-1">
+                                        <div>
+                                            <div class="flex justify-between text-[11px] text-slate-400">
+                                                <span>计算周期:</span>
+                                                <span id="lbl-rsi-period" class="mono text-white font-bold">14</span>
+                                            </div>
+                                            <input type="range" id="val-rsi-period" min="5" max="30" value="14" step="1" oninput="document.getElementById('lbl-rsi-period').innerText=this.value; validateCustomStrategyLive();" class="w-full accent-blue-500 mt-1">
+                                        </div>
+                                        <div>
+                                            <div class="flex justify-between text-[11px] text-slate-400">
+                                                <span>超卖抄底线:</span>
+                                                <span id="lbl-rsi-oversold" class="mono text-emerald-400 font-bold">30</span>
+                                            </div>
+                                            <input type="range" id="val-rsi-oversold" min="15" max="45" value="30" step="1" oninput="document.getElementById('lbl-rsi-oversold').innerText=this.value; validateCustomStrategyLive();" class="w-full accent-emerald-500 mt-1">
+                                        </div>
+                                        <div>
+                                            <div class="flex justify-between text-[11px] text-slate-400">
+                                                <span>超买防守线:</span>
+                                                <span id="lbl-rsi-overbought" class="mono text-rose-400 font-bold">70</span>
+                                            </div>
+                                            <input type="range" id="val-rsi-overbought" min="55" max="85" value="70" step="1" oninput="document.getElementById('lbl-rsi-overbought').innerText=this.value; validateCustomStrategyLive();" class="w-full accent-rose-500 mt-1">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 布林带与 MACD -->
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div class="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-2">
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="checkbox" id="ind-bb-enable" onchange="validateCustomStrategyLive()" class="accent-blue-500 rounded">
+                                            <span class="font-bold text-white">布林带 (Bollinger Bands)</span>
+                                        </label>
+                                        <div class="grid grid-cols-2 gap-2 text-[11px] pt-1">
+                                            <div>
+                                                <span class="text-slate-400">周期: <b id="lbl-bb-period" class="text-white">20</b></span>
+                                                <input type="range" id="val-bb-period" min="10" max="50" value="20" oninput="document.getElementById('lbl-bb-period').innerText=this.value; validateCustomStrategyLive();" class="w-full accent-blue-500 mt-1">
+                                            </div>
+                                            <div>
+                                                <span class="text-slate-400">标准差: <b id="lbl-bb-std" class="text-white">2.0</b>σ</span>
+                                                <input type="range" id="val-bb-std" min="1.5" max="3.0" value="2.0" step="0.1" oninput="document.getElementById('lbl-bb-std').innerText=this.value; validateCustomStrategyLive();" class="w-full accent-blue-500 mt-1">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="p-3 rounded-xl bg-slate-800/60 border border-slate-700/60 space-y-2">
+                                        <label class="flex items-center gap-2 cursor-pointer">
+                                            <input type="checkbox" id="ind-macd-enable" onchange="validateCustomStrategyLive()" class="accent-blue-500 rounded">
+                                            <span class="font-bold text-white">MACD 异同均线</span>
+                                        </label>
+                                        <div class="text-[11px] text-slate-400 pt-1">
+                                            标准参数: 12 快 / 26 慢 / 9 信号平滑
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: 买卖触发规则组合 -->
+                        <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+                                    <span class="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px]">3</span>
+                                    买卖与持仓触发规则
+                                </h3>
+                                <span class="text-[10px] text-slate-400">自动过滤信号冲突</span>
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                <div>
+                                    <label class="text-emerald-400 font-semibold block mb-1">做多 (LONG) 入场条件:</label>
+                                    <select id="custom-long-cond" onchange="validateCustomStrategyLive()" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                                        <option value="COMPOSITE_EMA_RSI" selected>均线多头金叉 且 RSI未超买 (推荐复合)</option>
+                                        <option value="EMA_GOLDEN_CROSS">仅依赖 EMA 快线上穿慢线 (金叉突破)</option>
+                                        <option value="RSI_OVERSOLD">RSI 极度超卖触底反弹 (极限抄底)</option>
+                                        <option value="BB_LOWER_BOUNCE">跌破布林下轨回归反弹 (触轨做多)</option>
+                                        <option value="MACD_BULL_CROSS">MACD 水上金叉且红柱放大 (动能爆发)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="text-rose-400 font-semibold block mb-1">做空 / 离场 (SHORT/EXIT) 条件:</label>
+                                    <select id="custom-short-cond" onchange="validateCustomStrategyLive()" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                                        <option value="COMPOSITE_EMA_RSI" selected>均线空头死叉 或 RSI超买破位 (推荐复合)</option>
+                                        <option value="EMA_DEATH_CROSS">仅依赖 EMA 快线下穿慢线 (死叉做空)</option>
+                                        <option value="RSI_OVERBOUGHT">RSI 极度超买逃顶 (超买做空)</option>
+                                        <option value="BB_UPPER_BREAK">突破布林上轨极值反转 (触轨做空)</option>
+                                        <option value="MACD_BEAR_CROSS">MACD 死叉且绿柱放大 (动能衰竭)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 4: 强制硬风控与资金管理约束 (防爆仓强制项) -->
+                        <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+                                    <span class="w-5 h-5 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px]">4</span>
+                                    强制硬风控与资金管理约束
+                                </h3>
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                                    必须设置硬止损，严禁裸奔
+                                </span>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                                <div>
+                                    <div class="flex justify-between text-[11px] text-slate-400 mb-1">
+                                        <span class="text-rose-400 font-bold">强制硬止损 (Stop Loss %):</span>
+                                        <span id="lbl-custom-sl" class="mono text-rose-400 font-bold">3.0%</span>
+                                    </div>
+                                    <input type="range" id="val-custom-sl" min="1.0" max="15.0" value="3.0" step="0.5" oninput="document.getElementById('lbl-custom-sl').innerText=this.value+'%'; validateCustomStrategyLive();" class="w-full accent-rose-500">
+                                    <span class="text-[10px] text-slate-500 block mt-0.5">单笔交易最大承受浮亏</span>
+                                </div>
+
+                                <div>
+                                    <div class="flex justify-between text-[11px] text-slate-400 mb-1">
+                                        <span class="text-emerald-400 font-bold">预期目标止盈 (Take Profit %):</span>
+                                        <span id="lbl-custom-tp" class="mono text-emerald-400 font-bold">6.0%</span>
+                                    </div>
+                                    <input type="range" id="val-custom-tp" min="2.0" max="30.0" value="6.0" step="0.5" oninput="document.getElementById('lbl-custom-tp').innerText=this.value+'%'; validateCustomStrategyLive();" class="w-full accent-emerald-500">
+                                    <span class="text-[10px] text-slate-500 block mt-0.5">达到目标即自动锁定收益</span>
+                                </div>
+
+                                <div>
+                                    <label class="text-slate-400 block mb-1">最大杠杆上限 (1x - 5x):</label>
+                                    <select id="custom-leverage" onchange="validateCustomStrategyLive()" class="w-full px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
+                                        <option value="1.0" selected>1x (稳健现货模式，0 清算风险)</option>
+                                        <option value="2.0">2x (轻度杠杆，最大允许)</option>
+                                        <option value="3.0">3x (中度杠杆，需严格止损)</option>
+                                        <option value="5.0">5x (激进高杠杆，强平风险极高)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右侧：实时策略健康雷达与体检建议箱 (4 列) -->
+                    <div class="lg:col-span-4 space-y-4">
+                        <div class="glass p-5 rounded-2xl border border-slate-800 space-y-4">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xs font-bold text-white flex items-center gap-1.5">
+                                    <span>🩺</span> 策略健康体检评分
+                                </h3>
+                                <span id="custom-health-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                    92 分 (A+ 优秀)
+                                </span>
+                            </div>
+
+                            <!-- 盈亏比指标卡 -->
+                            <div class="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1 text-xs">
+                                <div class="flex justify-between">
+                                    <span class="text-slate-400">数学盈亏比 (R:R Ratio):</span>
+                                    <span id="custom-rr-ratio" class="font-bold text-emerald-400">2.00 : 1</span>
+                                </div>
+                                <div class="text-[10px] text-slate-500">保本所需最低胜率: <span id="custom-breakeven-winrate" class="text-slate-300">33.3%</span></div>
+                            </div>
+
+                            <!-- 阻断性错误列表 (若有) -->
+                            <div id="custom-errors-box" class="hidden p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 space-y-1 text-xs text-rose-400">
+                            </div>
+
+                            <!-- 潜在风险预警列表 -->
+                            <div id="custom-warnings-box" class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-1 text-xs text-amber-300">
+                                <div class="font-bold text-[11px] flex items-center gap-1">
+                                    <span>⚠️</span> 风险检测正常，未发现严重参数偏颇
+                                </div>
+                            </div>
+
+                            <!-- 专家级量化优化建议 -->
+                            <div class="p-3 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-1.5 text-xs text-blue-300">
+                                <div class="font-bold text-[11px] flex items-center gap-1 text-blue-400">
+                                    <span>💡</span> 专家优化建议
+                                </div>
+                                <ul id="custom-suggestions-list" class="space-y-1 text-[11px] list-disc list-inside text-slate-300">
+                                    <li>指标组合数量合理，兼具趋势方向与动能确认。</li>
+                                    <li>强制止损已激活，具备正期望量化特征。</li>
+                                </ul>
+                            </div>
+
+                            <!-- 执行回测操作按钮 -->
+                            <button onclick="runCustomStrategyBacktest()" id="btn-run-custom-backtest" class="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-blue-500/20 transition flex items-center justify-center gap-2">
+                                <span>⚡️</span> 在币安真实历史行情中回测此策略
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 自定义策略回测结果看板 (点击回测后在下方直接展示) -->
+                <div id="custom-backtest-result-box" class="hidden space-y-4 pt-2">
+                    <div class="flex items-center justify-between border-t border-slate-800 pt-4">
+                        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                            <span>📈</span> 自定义策略在币安历史行情中的回测报告
+                        </h3>
+                        <button onclick="document.getElementById('custom-backtest-result-box').classList.add('hidden')" class="text-xs text-slate-400 hover:text-white">
+                            收起报告 ✕
+                        </button>
+                    </div>
+
+                    <!-- 核心绩效指标 -->
+                    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 text-center">
+                        <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                            <div class="text-[11px] text-slate-400">策略总收益率</div>
+                            <div id="cbt-return" class="text-lg font-bold mono text-emerald-400">+0.00%</div>
+                        </div>
+                        <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                            <div class="text-[11px] text-slate-400">超额收益 (Alpha)</div>
+                            <div id="cbt-alpha" class="text-lg font-bold mono text-blue-400">+0.00%</div>
+                        </div>
+                        <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                            <div class="text-[11px] text-slate-400">最大动态回撤</div>
+                            <div id="cbt-mdd" class="text-lg font-bold mono text-rose-400">0.00%</div>
+                        </div>
+                        <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                            <div class="text-[11px] text-slate-400">夏普比率 (Sharpe)</div>
+                            <div id="cbt-sharpe" class="text-lg font-bold mono text-amber-300">0.00</div>
+                        </div>
+                        <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                            <div class="text-[11px] text-slate-400">胜率 (Win Rate)</div>
+                            <div id="cbt-winrate" class="text-lg font-bold mono text-white">0.0%</div>
+                        </div>
+                        <div class="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
+                            <div class="text-[11px] text-slate-400">总交易笔数</div>
+                            <div id="cbt-trades" class="text-lg font-bold mono text-slate-300">0 笔</div>
+                        </div>
+                    </div>
+
+                    <!-- 动态净值曲线 -->
+                    <div class="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+                        <div class="flex justify-between text-xs text-slate-400">
+                            <span class="font-semibold text-white">策略动态净值走势图 (对比标的 Buy & Hold 基准)</span>
+                            <div class="flex items-center gap-3">
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span>自定义策略净值</span>
+                                <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>标的基准</span>
+                            </div>
+                        </div>
+                        <div id="cbt-chart-box" class="h-44 w-full flex items-center justify-center">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- TAB 6: 📈 币安策略回测台 (Binance Backtest Studio) -->
         <div id="tab-backtest" class="tab-content hidden space-y-6">
             <div class="glass p-6 rounded-2xl space-y-5">
@@ -871,9 +1302,19 @@ DASHBOARD_HTML = """
                     <div>
                         <label class="text-slate-400 block mb-1">量化策略模型:</label>
                         <select id="bt-strategy" class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs">
-                            <option value="laya_momentum" selected>⚡️ Laya 动量风控策略</option>
+                            <option value="laya_momentum" selected>⚡️ Laya 动量风控策略 (自研核心)</option>
                             <option value="dual_ema">📈 双均线趋势跟踪 (EMA-12/26)</option>
-                            <option value="bollinger">📊 布林带均值回归</option>
+                            <option value="macd_cross">🌊 MACD 动能共振策略 (12/26/9)</option>
+                            <option value="supertrend">🛡 SuperTrend 超级趋势自适应通道</option>
+                            <option value="donchian_breakout">🐢 海龟交易唐奇安通道突破 (20-bar)</option>
+                            <option value="bollinger">📊 布林带 2.0σ 统计均值回归</option>
+                            <option value="rsi_mean_reversion">🎯 经典 RSI 极限反转策略 (14, 28/72)</option>
+                            <option value="keltner_channel">〰️ 肯特纳通道平滑回归策略 (EMA+ATR)</option>
+                            <option value="stoch_rsi">⚡️ 随机相对强弱 (StochRSI) 敏感摆荡</option>
+                            <option value="volatility_squeeze">💥 TTM Squeeze 波动率挤压突破</option>
+                            <option value="dual_thrust">🏹 Dual Thrust 经典日内自适应突破</option>
+                            <option value="mfi_divergence">💎 MFI 资金流量指标量价背离</option>
+                            <option value="custom_strategy">🛠 当前自定义工坊配置的策略</option>
                         </select>
                     </div>
                     <div>
@@ -1242,6 +1683,62 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
+    <!-- 策略全景深度教学与避坑详情弹窗 -->
+    <div id="strategy-detail-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="glass p-6 md:p-8 rounded-2xl max-w-2xl w-full border border-blue-500/40 space-y-5 max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <span id="sd-modal-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30"></span>
+                    <h3 id="sd-modal-title" class="text-base md:text-lg font-bold text-white"></h3>
+                </div>
+                <button onclick="closeStrategyDetailModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+
+            <!-- 理论与数学公式 -->
+            <div class="space-y-2">
+                <div class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                    <span>📐</span> 数学原理与公式推导
+                </div>
+                <div id="sd-modal-formula" class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 mono text-xs text-blue-300 whitespace-pre-wrap leading-relaxed">
+                </div>
+            </div>
+
+            <!-- 适用行情与优劣势对比 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-1.5">
+                    <div class="font-bold text-emerald-400 flex items-center gap-1">
+                        <span>✓</span> 核心优势与盈利逻辑
+                    </div>
+                    <ul id="sd-modal-pros" class="space-y-1 text-[11px] text-slate-300 list-disc list-inside"></ul>
+                </div>
+                <div class="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 space-y-1.5">
+                    <div class="font-bold text-rose-400 flex items-center gap-1">
+                        <span>✕</span> 致命弱点与避坑警示
+                    </div>
+                    <ul id="sd-modal-cons" class="space-y-1 text-[11px] text-slate-300 list-disc list-inside"></ul>
+                </div>
+            </div>
+
+            <!-- 参数调优与风控指引 -->
+            <div class="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2 text-xs">
+                <div class="font-bold text-amber-400 flex items-center gap-1.5">
+                    <span>🛡</span> 资金管理与止损纪律要求
+                </div>
+                <p id="sd-modal-risk" class="text-slate-300 text-[11px] leading-relaxed"></p>
+            </div>
+
+            <!-- 弹窗底部操作按钮 -->
+            <div class="flex items-center justify-end gap-3 pt-2">
+                <button onclick="closeStrategyDetailModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition">
+                    关闭
+                </button>
+                <button id="sd-modal-btn-backtest" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-500/20 transition flex items-center gap-1.5">
+                    <span>⚡️</span> 载入回测台验证
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const DICT = {
             'STRONG_BUY': '强烈买入',
@@ -1301,6 +1798,7 @@ DASHBOARD_HTML = """
         // 当前监控池数据
         let currentWatchlist = """ + str(INITIAL_WATCHLIST).replace("'", '"') + """;
         let globalUniverse = """ + str(GLOBAL_UNIVERSE).replace("'", '"') + """;
+        let strategyCatalog = """ + json.dumps(STRATEGY_CATALOG, ensure_ascii=False) + """;
         let activeFilter = 'ALL';
         let activeUniverseCat = 'ALL';
 
@@ -1399,23 +1897,32 @@ DASHBOARD_HTML = """
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active', 'bg-blue-600', 'text-white'));
-            document.getElementById(tabId).classList.remove('hidden');
+            const target = document.getElementById(tabId);
+            if (target) target.classList.remove('hidden');
             
-            if (tabId === 'tab-markets') document.getElementById('btn-markets').classList.add('active');
+            if (tabId === 'tab-markets') document.getElementById('btn-markets')?.classList.add('active');
             if (tabId === 'tab-universe') {
-                document.getElementById('btn-universe').classList.add('active');
+                document.getElementById('btn-universe')?.classList.add('active');
                 renderUniverseGrid();
             }
+            if (tabId === 'tab-academy') {
+                document.getElementById('btn-academy')?.classList.add('active');
+                renderStrategyAcademy();
+            }
+            if (tabId === 'tab-custom-builder') {
+                document.getElementById('btn-custom-builder')?.classList.add('active');
+                validateCustomStrategyLive();
+            }
             if (tabId === 'tab-backtest') {
-                document.getElementById('btn-backtest').classList.add('active');
+                document.getElementById('btn-backtest')?.classList.add('active');
             }
             if (tabId === 'tab-paper') {
-                document.getElementById('btn-paper').classList.add('active');
+                document.getElementById('btn-paper')?.classList.add('active');
                 loadPaperAccount();
             }
-            if (tabId === 'tab-laya') document.getElementById('btn-laya').classList.add('active');
-            if (tabId === 'tab-research') document.getElementById('btn-research').classList.add('active');
-            if (tabId === 'tab-risk') document.getElementById('btn-risk').classList.add('active');
+            if (tabId === 'tab-laya') document.getElementById('btn-laya')?.classList.add('active');
+            if (tabId === 'tab-research') document.getElementById('btn-research')?.classList.add('active');
+            if (tabId === 'tab-risk') document.getElementById('btn-risk')?.classList.add('active');
         }
 
         function filterUniverseCat(cat) {
@@ -1720,6 +2227,420 @@ DASHBOARD_HTML = """
             }
         }
 
+        // ================= 量化策略学院与教学逻辑 =================
+        let activeAcademyCat = 'ALL';
+
+        function filterAcademyCat(cat) {
+            activeAcademyCat = cat;
+            document.querySelectorAll('.academy-cat-btn').forEach(b => {
+                b.classList.remove('active', 'bg-blue-600', 'text-white');
+                b.classList.add('bg-slate-800', 'text-slate-300');
+            });
+            event.target.classList.add('active', 'bg-blue-600', 'text-white');
+            event.target.classList.remove('bg-slate-800', 'text-slate-300');
+            renderStrategyAcademy();
+        }
+
+        function renderStrategyAcademy() {
+            const grid = document.getElementById('academy-strategy-grid');
+            if (!grid) return;
+            const searchVal = (document.getElementById('academy-search-input')?.value || '').trim().toLowerCase();
+            grid.innerHTML = '';
+
+            const strats = Object.values(strategyCatalog);
+            const filtered = strats.filter(s => {
+                const matchCat = (activeAcademyCat === 'ALL' || s.category === activeAcademyCat);
+                const matchSearch = !searchVal || 
+                    s.name.toLowerCase().includes(searchVal) || 
+                    s.theory_summary.toLowerCase().includes(searchVal) ||
+                    s.suitable_market.toLowerCase().includes(searchVal);
+                return matchCat && matchSearch;
+            });
+
+            if (filtered.length === 0) {
+                grid.innerHTML = '<div class="col-span-3 text-center py-10 text-slate-500 text-xs">未找到符合条件的量化策略，可尝试清空搜索词或切换分类。</div>';
+                return;
+            }
+
+            filtered.forEach(s => {
+                const card = document.createElement('div');
+                card.className = 'glass p-5 rounded-2xl border border-slate-800 hover:border-blue-500/40 transition flex flex-col justify-between space-y-4';
+                
+                const prosHtml = s.pros.slice(0, 2).map(p => `<li class="text-[11px] text-slate-300 leading-snug">✓ ${p}</li>`).join('');
+                const consHtml = s.cons.slice(0, 1).map(c => `<div class="text-[11px] text-rose-300 leading-snug">⚠️ 避坑警示: ${c}</div>`).join('');
+
+                card.innerHTML = `
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between">
+                            <span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-${s.tag_color || 'blue'}-500/20 text-${s.tag_color || 'blue'}-400 border border-${s.tag_color || 'blue'}-500/30">
+                                ${s.badge || '开源经典'}
+                            </span>
+                            <span class="text-[10px] text-slate-400">${s.category}</span>
+                        </div>
+                        <div>
+                            <h4 class="text-sm font-bold text-white">${s.name}</h4>
+                            <p class="text-xs text-slate-400 mt-1 line-clamp-2 leading-relaxed">${s.theory_summary}</p>
+                        </div>
+                        <div class="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800 space-y-1">
+                            <div class="text-[10px] text-slate-400 font-semibold">最适配行情土壤:</div>
+                            <div class="text-[11px] text-amber-300">${s.suitable_market}</div>
+                        </div>
+                        <ul class="space-y-1 text-slate-300 pt-1">
+                            ${prosHtml}
+                        </ul>
+                        <div class="p-2.5 rounded-xl bg-rose-950/20 border border-rose-900/30">
+                            ${consHtml}
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 pt-3 border-t border-slate-800">
+                        <button onclick="openStrategyDetailModal('${s.id}')" class="py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition flex items-center justify-center gap-1">
+                            <span>🔍</span> 深度教学
+                        </button>
+                        <button onclick="loadStrategyToBacktest('${s.id}')" class="py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition flex items-center justify-center gap-1">
+                            <span>⚡️</span> 载入回测
+                        </button>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function openStrategyDetailModal(stratId) {
+            const s = strategyCatalog[stratId];
+            if (!s) return;
+
+            document.getElementById('sd-modal-title').innerText = s.name;
+            document.getElementById('sd-modal-badge').innerText = s.badge || s.category;
+            document.getElementById('sd-modal-formula').innerText = s.math_formula.trim();
+
+            const prosList = document.getElementById('sd-modal-pros');
+            prosList.innerHTML = s.pros.map(p => `<li>${p}</li>`).join('');
+
+            const consList = document.getElementById('sd-modal-cons');
+            consList.innerHTML = s.cons.map(c => `<li>${c}</li>`).join('');
+
+            document.getElementById('sd-modal-risk').innerText = s.risk_management_guide;
+
+            const btnBt = document.getElementById('sd-modal-btn-backtest');
+            btnBt.onclick = () => {
+                closeStrategyDetailModal();
+                loadStrategyToBacktest(stratId);
+            };
+
+            document.getElementById('strategy-detail-modal').classList.remove('hidden');
+        }
+
+        function closeStrategyDetailModal() {
+            document.getElementById('strategy-detail-modal').classList.add('hidden');
+        }
+
+        function loadStrategyToBacktest(stratId) {
+            switchTab('tab-backtest');
+            const sel = document.getElementById('bt-strategy');
+            if (sel) {
+                sel.value = stratId;
+            }
+            showToast(`已成功载入策略: ${strategyCatalog[stratId]?.name || stratId}，可直接点击执行回测！`, true);
+        }
+
+        // ================= 自定义策略工坊逻辑 =================
+        const CUSTOM_PRESETS = {
+            trend_breakout: {
+                name: "稳健双均线动量复合策略",
+                type: "TREND",
+                ema: { enable: true, fast: 12, slow: 26 },
+                rsi: { enable: true, period: 14, oversold: 30, overbought: 70 },
+                bb: { enable: false, period: 20, std: 2.0 },
+                macd: { enable: false },
+                long_cond: "COMPOSITE_EMA_RSI",
+                short_cond: "COMPOSITE_EMA_RSI",
+                sl: 3.0,
+                tp: 6.0,
+                leverage: 2.0
+            },
+            mean_reversion: {
+                name: "布林带极值触轨抄底反转策略",
+                type: "MEAN_REVERSION",
+                ema: { enable: false, fast: 10, slow: 30 },
+                rsi: { enable: true, period: 14, oversold: 28, overbought: 72 },
+                bb: { enable: true, period: 20, std: 2.2 },
+                macd: { enable: false },
+                long_cond: "BB_LOWER_BOUNCE",
+                short_cond: "BB_UPPER_BREAK",
+                sl: 2.5,
+                tp: 5.0,
+                leverage: 1.0
+            },
+            momentum_macd: {
+                name: "MACD柱体动能加速突破策略",
+                type: "MOMENTUM",
+                ema: { enable: true, fast: 9, slow: 21 },
+                rsi: { enable: false, period: 14, oversold: 30, overbought: 70 },
+                bb: { enable: false, period: 20, std: 2.0 },
+                macd: { enable: true },
+                long_cond: "MACD_BULL_CROSS",
+                short_cond: "MACD_BEAR_CROSS",
+                sl: 4.0,
+                tp: 8.0,
+                leverage: 2.0
+            }
+        };
+
+        function loadCustomPreset(presetKey) {
+            const p = CUSTOM_PRESETS[presetKey];
+            if (!p) return;
+
+            document.getElementById('custom-name').value = p.name;
+            document.getElementById('custom-type').value = p.type;
+
+            document.getElementById('ind-ema-enable').checked = p.ema.enable;
+            document.getElementById('val-ema-fast').value = p.ema.fast;
+            document.getElementById('lbl-ema-fast').innerText = p.ema.fast;
+            document.getElementById('val-ema-slow').value = p.ema.slow;
+            document.getElementById('lbl-ema-slow').innerText = p.ema.slow;
+
+            document.getElementById('ind-rsi-enable').checked = p.rsi.enable;
+            document.getElementById('val-rsi-period').value = p.rsi.period;
+            document.getElementById('lbl-rsi-period').innerText = p.rsi.period;
+            document.getElementById('val-rsi-oversold').value = p.rsi.oversold;
+            document.getElementById('lbl-rsi-oversold').innerText = p.rsi.oversold;
+            document.getElementById('val-rsi-overbought').value = p.rsi.overbought;
+            document.getElementById('lbl-rsi-overbought').innerText = p.rsi.overbought;
+
+            document.getElementById('ind-bb-enable').checked = p.bb.enable;
+            document.getElementById('val-bb-period').value = p.bb.period;
+            document.getElementById('lbl-bb-period').innerText = p.bb.period;
+            document.getElementById('val-bb-std').value = p.bb.std;
+            document.getElementById('lbl-bb-std').innerText = p.bb.std;
+
+            document.getElementById('ind-macd-enable').checked = p.macd.enable;
+
+            document.getElementById('custom-long-cond').value = p.long_cond;
+            document.getElementById('custom-short-cond').value = p.short_cond;
+
+            document.getElementById('val-custom-sl').value = p.sl;
+            document.getElementById('lbl-custom-sl').innerText = p.sl + '%';
+            document.getElementById('val-custom-tp').value = p.tp;
+            document.getElementById('lbl-custom-tp').innerText = p.tp + '%';
+            document.getElementById('custom-leverage').value = p.leverage.toFixed(1);
+
+            showToast(`已载入预设模板: ${p.name}`, true);
+            validateCustomStrategyLive();
+        }
+
+        function getCustomConfigPayload() {
+            const indicators = {};
+            if (document.getElementById('ind-ema-enable')?.checked) {
+                indicators['ema'] = {
+                    fast_period: parseInt(document.getElementById('val-ema-fast').value),
+                    slow_period: parseInt(document.getElementById('val-ema-slow').value)
+                };
+            }
+            if (document.getElementById('ind-rsi-enable')?.checked) {
+                indicators['rsi'] = {
+                    period: parseInt(document.getElementById('val-rsi-period').value),
+                    oversold: parseFloat(document.getElementById('val-rsi-oversold').value),
+                    overbought: parseFloat(document.getElementById('val-rsi-overbought').value)
+                };
+            }
+            if (document.getElementById('ind-bb-enable')?.checked) {
+                indicators['bollinger'] = {
+                    period: parseInt(document.getElementById('val-bb-period').value),
+                    std_dev: parseFloat(document.getElementById('val-bb-std').value)
+                };
+            }
+            if (document.getElementById('ind-macd-enable')?.checked) {
+                indicators['macd'] = {
+                    fast_period: 12,
+                    slow_period: 26,
+                    signal_period: 9
+                };
+            }
+
+            return {
+                name: document.getElementById('custom-name')?.value || '我的自定义策略',
+                strategy_type: document.getElementById('custom-type')?.value || 'TREND',
+                indicators: indicators,
+                entry_rules: {
+                    long_condition: document.getElementById('custom-long-cond')?.value || 'NONE',
+                    short_condition: document.getElementById('custom-short-cond')?.value || 'NONE'
+                },
+                risk_management: {
+                    stop_loss_pct: parseFloat(document.getElementById('val-custom-sl')?.value || 3.0),
+                    take_profit_pct: parseFloat(document.getElementById('val-custom-tp')?.value || 6.0),
+                    leverage: parseFloat(document.getElementById('custom-leverage')?.value || 1.0)
+                }
+            };
+        }
+
+        async function validateCustomStrategyLive() {
+            const payload = getCustomConfigPayload();
+            const sl = payload.risk_management.stop_loss_pct;
+            const tp = payload.risk_management.take_profit_pct;
+
+            // 实时更新前端盈亏比展示
+            const rr = sl > 0 ? (tp / sl).toFixed(2) : '0.00';
+            const breakeven = sl + tp > 0 ? ((sl / (sl + tp)) * 100).toFixed(1) + '%' : '50.0%';
+            if (document.getElementById('custom-rr-ratio')) {
+                document.getElementById('custom-rr-ratio').innerText = `${rr} : 1`;
+                document.getElementById('custom-rr-ratio').className = rr >= 1.5 ? 'font-bold text-emerald-400' : (rr >= 1.0 ? 'font-bold text-amber-400' : 'font-bold text-rose-400');
+            }
+            if (document.getElementById('custom-breakeven-winrate')) {
+                document.getElementById('custom-breakeven-winrate').innerText = breakeven;
+            }
+
+            try {
+                const res = await fetch('/api/crypto/custom-strategy/validate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ config: payload })
+                });
+                const d = await res.json();
+
+                const badge = document.getElementById('custom-health-badge');
+                if (badge) {
+                    badge.innerText = `${d.score} 分 (${d.grade})`;
+                    badge.className = `px-2.5 py-0.5 rounded-full text-xs font-bold bg-${d.grade_color}-500/20 text-${d.grade_color}-400 border border-${d.grade_color}-500/30`;
+                }
+
+                // 阻断性错误
+                const errBox = document.getElementById('custom-errors-box');
+                const btnBt = document.getElementById('btn-run-custom-backtest');
+                if (errBox) {
+                    if (d.errors && d.errors.length > 0) {
+                        errBox.innerHTML = d.errors.map(e => `<div>✕ ${e}</div>`).join('');
+                        errBox.classList.remove('hidden');
+                        if (btnBt) {
+                            btnBt.disabled = true;
+                            btnBt.classList.add('opacity-50', 'cursor-not-allowed');
+                            btnBt.innerText = '✕ 策略存在阻断性违规，请先修正上方错误';
+                        }
+                    } else {
+                        errBox.classList.add('hidden');
+                        if (btnBt) {
+                            btnBt.disabled = false;
+                            btnBt.classList.remove('opacity-50', 'cursor-not-allowed');
+                            btnBt.innerText = '⚡️ 在币安真实历史行情中回测此策略';
+                        }
+                    }
+                }
+
+                // 警告
+                const warnBox = document.getElementById('custom-warnings-box');
+                if (warnBox) {
+                    if (d.warnings && d.warnings.length > 0) {
+                        warnBox.innerHTML = d.warnings.map(w => `<div>⚠️ ${w}</div>`).join('');
+                    } else {
+                        warnBox.innerHTML = '<div class="font-bold text-[11px] flex items-center gap-1 text-emerald-400"><span>✓</span> 风险检测正常，未发现参数偏颇</div>';
+                    }
+                }
+
+                // 建议
+                const sugList = document.getElementById('custom-suggestions-list');
+                if (sugList) {
+                    sugList.innerHTML = (d.suggestions || []).map(s => `<li>${s}</li>`).join('');
+                }
+            } catch(e) {
+                console.error('策略体检校验异常:', e);
+            }
+        }
+
+        async function runCustomStrategyBacktest() {
+            const btn = document.getElementById('btn-run-custom-backtest');
+            btn.disabled = true;
+            btn.innerText = '正在拉取币安历史数据并执行回测...';
+
+            const payload = getCustomConfigPayload();
+
+            try {
+                const res = await fetch('/api/crypto/backtest', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        symbol: 'BTC/USDT',
+                        interval: '1d',
+                        limit: 180,
+                        strategy: 'custom_strategy',
+                        initial_capital: 100000.0,
+                        leverage: payload.risk_management.leverage,
+                        allow_short: true,
+                        custom_config: payload
+                    })
+                });
+                const d = await res.json();
+
+                if (d.error) {
+                    showErrorModal('自定义策略回测错误: ' + d.error);
+                    return;
+                }
+
+                const resBox = document.getElementById('custom-backtest-result-box');
+                resBox.classList.remove('hidden');
+
+                const m = d.metrics;
+                document.getElementById('cbt-return').innerText = (m.total_return_pct >= 0 ? '+' : '') + m.total_return_pct.toFixed(2) + '%';
+                document.getElementById('cbt-return').className = m.total_return_pct >= 0 ? 'text-lg font-bold mono text-emerald-400' : 'text-lg font-bold mono text-rose-400';
+
+                document.getElementById('cbt-alpha').innerText = (m.alpha_pct >= 0 ? '+' : '') + m.alpha_pct.toFixed(2) + '%';
+                document.getElementById('cbt-alpha').className = m.alpha_pct >= 0 ? 'text-lg font-bold mono text-blue-400' : 'text-lg font-bold mono text-rose-400';
+
+                document.getElementById('cbt-mdd').innerText = m.max_drawdown_pct.toFixed(2) + '%';
+                document.getElementById('cbt-sharpe').innerText = m.sharpe_ratio.toFixed(2);
+                document.getElementById('cbt-winrate').innerText = m.win_rate_pct.toFixed(1) + '%';
+                document.getElementById('cbt-trades').innerText = m.total_trades + ' 笔';
+
+                renderCustomChartSvg(d.equity_curve, m.initial_capital);
+
+                showToast(`自定义策略回测完成！总收益率: ${m.total_return_pct.toFixed(2)}% | 胜率: ${m.win_rate_pct.toFixed(1)}%`, true);
+                resBox.scrollIntoView({ behavior: 'smooth' });
+            } catch(e) {
+                showErrorModal('回测请求异常: ' + e);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '⚡️ 在币安真实历史行情中回测此策略';
+            }
+        }
+
+        function renderCustomChartSvg(curve, initialCapital) {
+            const box = document.getElementById('cbt-chart-box');
+            if (!box || !curve || curve.length < 2) return;
+
+            const w = box.clientWidth || 700;
+            const h = 170;
+            const pad = 20;
+
+            const equities = curve.map(c => c.equity);
+            const benchmarks = curve.map(c => c.benchmark_equity);
+            const allVals = equities.concat(benchmarks);
+            const minVal = Math.min(...allVals) * 0.98;
+            const maxVal = Math.max(...allVals) * 1.02;
+            const valRange = maxVal - minVal || 1.0;
+
+            const n = curve.length;
+            const getX = (idx) => pad + (idx / (n - 1)) * (w - pad * 2);
+            const getY = (val) => h - pad - ((val - minVal) / valRange) * (h - pad * 2);
+
+            let stratPts = curve.map((c, i) => `${getX(i).toFixed(1)},${getY(c.equity).toFixed(1)}`).join(' ');
+            let bchPts = curve.map((c, i) => `${getX(i).toFixed(1)},${getY(c.benchmark_equity).toFixed(1)}`).join(' ');
+
+            let areaPts = `${getX(0).toFixed(1)},${h - pad} ` + stratPts + ` ${getX(n-1).toFixed(1)},${h - pad}`;
+
+            box.innerHTML = `
+                <svg viewBox="0 0 ${w} ${h}" class="w-full h-full overflow-visible">
+                    <defs>
+                        <linearGradient id="cbtGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.3"/>
+                            <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.0"/>
+                        </linearGradient>
+                    </defs>
+                    <polygon points="${areaPts}" fill="url(#cbtGrad)"/>
+                    <polyline points="${bchPts}" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.8"/>
+                    <polyline points="${stratPts}" fill="none" stroke="#3b82f6" stroke-width="2.5"/>
+                </svg>
+            `;
+        }
+
         // ================= 币安策略回测逻辑 =================
         async function runBacktest() {
             const sym = document.getElementById('bt-symbol').value;
@@ -1734,19 +2655,24 @@ DASHBOARD_HTML = """
             btn.innerText = '正在向币安拉取历史K线并执行回测...';
             btn.disabled = true;
 
+            const bodyPayload = {
+                symbol: sym,
+                interval: interval,
+                limit: limit,
+                strategy: strategy,
+                initial_capital: capital,
+                leverage: leverage,
+                allow_short: allowShort
+            };
+            if (strategy === 'custom_strategy') {
+                bodyPayload.custom_config = getCustomConfigPayload();
+            }
+
             try {
                 const res = await fetch('/api/crypto/backtest', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        symbol: sym,
-                        interval: interval,
-                        limit: limit,
-                        strategy: strategy,
-                        initial_capital: capital,
-                        leverage: leverage,
-                        allow_short: allowShort
-                    })
+                    body: JSON.stringify(bodyPayload)
                 });
                 const d = await res.json();
                 if (!res.ok || d.error) {
@@ -2315,20 +3241,42 @@ async def simulate_order(req: SimulateOrderRequest):
 
 @app.post("/api/crypto/backtest")
 async def run_crypto_backtest(req: CryptoBacktestRequest):
-    """执行币安真实历史 K 线量化策略回测"""
+    """执行币安真实历史 K 线量化策略回测（支持 12 款经典策略与自定义规则引擎）"""
     try:
         df = BinanceDataClient.fetch_klines(symbol=req.symbol, interval=req.interval, limit=req.limit)
-        strat = StrategyRegistry.get_strategy(req.strategy)
+        if req.strategy == "custom_strategy" and req.custom_config:
+            val_res = CustomStrategyValidator.validate(req.custom_config)
+            if not val_res["is_valid"]:
+                return {"error": "自定义策略未通过安全检查: " + " | ".join(val_res["errors"])}
+            strat = StrategyRegistry.get_strategy("custom_strategy", val_res["clean_config"])
+            leverage = float(val_res["clean_config"]["risk_management"]["leverage"])
+        else:
+            strat = StrategyRegistry.get_strategy(req.strategy)
+            leverage = req.leverage
+
         backtester = CryptoBacktester(
             strategy=strat,
             initial_capital=req.initial_capital,
-            leverage=req.leverage,
+            leverage=leverage,
             allow_short=req.allow_short
         )
         res = backtester.run(df, symbol=req.symbol)
         return res
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/api/crypto/strategies")
+async def get_crypto_strategies():
+    """获取全量 12+ 经典量化策略与教学知识库清单"""
+    return {
+        "strategies": StrategyRegistry.list_strategies(),
+        "catalog": STRATEGY_CATALOG
+    }
+
+@app.post("/api/crypto/custom-strategy/validate")
+async def validate_custom_strategy(req: ValidateCustomStrategyRequest):
+    """自定义策略参数安全检查与健康体检评分"""
+    return CustomStrategyValidator.validate(req.config)
 
 @app.get("/api/crypto/paper/account")
 async def get_crypto_paper_account():

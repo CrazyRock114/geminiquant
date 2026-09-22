@@ -31,6 +31,22 @@ class FeatureEngine:
         return float(rsi.iloc[-1])
 
     @staticmethod
+    def calculate_rsi_series(series: pd.Series, period: int = 14, method: str = "wilder") -> pd.Series:
+        """返回全量向量化 RSI 序列 (pd.Series)"""
+        delta = series.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
+        if method == "wilder":
+            avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+            avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+        else:
+            avg_gain = gain.rolling(window=period, min_periods=period).mean()
+            avg_loss = loss.rolling(window=period, min_periods=period).mean()
+        rs = avg_gain / (avg_loss + 1e-10)
+        rsi = 100.0 - (100.0 / (1.0 + rs))
+        return rsi.fillna(50.0)
+
+    @staticmethod
     def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Dict[str, float]:
         """指数平滑异同移动平均线 MACD"""
         if len(series) < slow + signal:
