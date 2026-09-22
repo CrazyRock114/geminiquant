@@ -127,7 +127,11 @@ class BinancePaperBroker:
             symbol = f"{symbol}/USDT"
 
         side = side.upper()
-        if side not in ("BUY", "SELL"):
+        if side in ("BUY", "LONG"):
+            side = "BUY"
+        elif side in ("SELL", "SHORT"):
+            side = "SELL"
+        else:
             return {"success": False, "error": "委托方向必须为 BUY (做多) 或 SELL (做空)"}
 
         if volume <= 0:
