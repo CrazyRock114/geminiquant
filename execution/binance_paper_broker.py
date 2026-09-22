@@ -67,9 +67,9 @@ class BinancePaperBroker:
         total_unrealized_pnl = 0.0
 
         updated_positions = []
-        for sym, pos in list(self.positions.items()):
+        for pos_id, pos in list(self.positions.items()):
             # 实时更新现价
-            mark_price = self.fetch_live_price(sym)
+            mark_price = self.fetch_live_price(pos["symbol"])
             pos["mark_price"] = mark_price
 
             vol = pos["volume"]
