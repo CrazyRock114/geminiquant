@@ -1,0 +1,42 @@
+# OmniQuant Declarative Risk Rules Matrix
+global:
+  max_daily_drawdown_pct: 3.0       # 当日账户权益回撤超3%强制暂停所有新开仓并启动降仓
+  max_total_leverage: 3.0           # 跨资产全账户总名义杠杆上限
+  hard_circuit_breaker: true        # 是否开启物理熔断
+  allow_margin_call: false          # 是否允许触及维持保证金预警
+
+assets:
+  EQUITY_CN:
+    t_plus_1_strict: true           # 严格执行 A 股 T+1 卖出限制
+    price_limit_protection: true    # 涨跌停保护：涨停禁止追买、跌停禁止挂卖
+    max_position_pct: 15.0          # 单只个股最大仓位上限 15%
+    lot_size: 100                   # 最小交易单位 100 股
+    stamp_duty_rate: 0.0005         # 单边印花税 0.05%
+
+  EQUITY_US_HK:
+    allow_short: true               # 允许做空
+    max_position_pct: 20.0          # 单只美股/港股最大仓位 20%
+    pre_market_restricted: true     # 盘前盘后限制仅限挂限价单（Limit Order）
+    max_slippage_bps: 20.0          # 滑点保护 20 bps
+
+  CRYPTO:
+    max_leverage: 5.0               # 合约最大杠杆倍数
+    max_position_pct: 25.0          # 单币种最大持仓占比
+    liquidation_buffer_pct: 15.0    # 距离强平价小于15%时自动触发平仓减险
+    funding_rate_threshold: 0.001   # 8小时资金费率绝对值超0.1%时告警并考量反向套利
+
+  COMMODITY_FUTURES:
+    max_margin_usage_pct: 65.0      # 期货保证金占用率超过65%时禁止新开仓
+    rollover_days_before_expiry: 5  # 主力合约到期前5天强制平仓或移仓换月
+    allow_night_trading: true       # 允许夜盘交易
+    basis_spread_stop_loss_pct: 2.0 # 基差套利止损线
+
+  PRECIOUS_METALS:
+    gold_silver_ratio_alert: 90.0   # 金银比极值阈值告警
+    cross_market_spread_limit: 1.5  # 内外盘溢价偏离度熔断
+
+  OPTIONS:
+    max_portfolio_delta: 0.25       # 组合总绝对 Delta 敞口上限（对冲偏离度控制）
+    max_portfolio_gamma: 0.05       # 组合总绝对 Gamma 上限（防止巨震Gamma爆炸）
+    short_option_naked_forbidden: true # 严禁裸卖空期权（Naked Short Call/Put）
+    days_to_expiration_cutoff: 3    # 距离到期日小于3天时强制平仓平值/虚值期权，规避归零与行权风险
